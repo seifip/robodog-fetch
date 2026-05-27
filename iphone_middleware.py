@@ -47,13 +47,13 @@ from dimos.experimental.fetch.record3d_source import Record3DSource
 try:
     from dimos.experimental.fetch.tts import (
         TtsProvider,
-        gemini_live_tts,
+        gemini_tts,
         map_voice,
     )
 except ModuleNotFoundError:
     from tts import (  # type: ignore[no-redef]
         TtsProvider,
-        gemini_live_tts,
+        gemini_tts,
         map_voice,
     )
 from dimos.msgs.geometry_msgs.Twist import Twist
@@ -875,11 +875,11 @@ class FetchIphoneMiddleware:
 
             if self.tts_provider == "gemini":
                 try:
-                    wav_bytes = await gemini_live_tts(
+                    wav_bytes = await gemini_tts(
                         text, voice=map_voice(voice, "gemini"),
                     )
                 except Exception as exc:
-                    logger.exception("Gemini Live TTS failed")
+                    logger.exception("Gemini TTS failed")
                     return JSONResponse(
                         {"error": f"Gemini TTS error: {exc}"},
                         status_code=503,
@@ -1082,7 +1082,7 @@ def _parse_args() -> argparse.Namespace:
         "--tts-provider",
         choices=("openai", "gemini"),
         default="openai",
-        help="TTS provider. Gemini uses Live API for streaming voice.",
+        help="TTS provider. Gemini uses native Gemini TTS.",
     )
     parser.add_argument("--tts-model", default="tts-1", help="OpenAI TTS model.")
     parser.add_argument("--tts-voice", default="echo", help="TTS voice name (OpenAI or Gemini prebuilt).")

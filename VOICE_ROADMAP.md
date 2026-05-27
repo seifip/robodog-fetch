@@ -4,18 +4,18 @@
 
 **Status**: Implemented as provider-aware `/speak` routing.
 
-**Scope**: Add Gemini 3.1 Flash Live Preview for output-only speech synthesis
+**Scope**: Add Gemini 3.1 Flash TTS Preview for output-only speech synthesis
 while preserving OpenAI TTS and making OpenAI Realtime optional.
 
 **Problem solved**: OpenAI-only TTS made the voice route rigid and less expressive
-for the beach demo. The app now has a Gemini Live TTS route for playful output
+for the beach demo. The app now has a Gemini TTS route for playful output
 voice, while OpenAI TTS and OpenAI Realtime remain available for fallback or
 experimentation.
 
 **What changed**:
 - `/speak` selects the provider with `--tts-provider`.
-- `--tts-provider gemini` opens an ephemeral Gemini Live session, sends the line,
-  collects PCM audio chunks, and returns WAV to the browser.
+- `--tts-provider gemini` calls Gemini 3.1 Flash TTS Preview, extracts inline
+  PCM audio, and returns WAV to the browser.
 - `--tts-provider openai` keeps the existing OpenAI TTS MP3 route.
 - `--enable-realtime` opts into OpenAI Realtime WebRTC before `/speak` fallback,
   but only when `--tts-provider openai` is selected.
@@ -25,9 +25,8 @@ experimentation.
 **What doesn't change**: The interaction flow. The dog still drives the state
 machine. No audio input. No listening. Same composed lines, same triggers.
 
-**Remaining gap**: Gemini Live audio is streamed inside the server session, but
-the browser still receives a completed WAV blob. True chunked playback to the
-browser remains a future optimization.
+**Remaining gap**: Gemini TTS currently returns a completed WAV blob. True
+chunked playback to the browser remains a future optimization.
 
 **UX win**: More expressive provider choice with predictable fallback behavior.
 The dog sounds more alive without changing the state machine.
@@ -46,7 +45,7 @@ timing makes the interaction feel reciprocal.
 
 **What changes**:
 - Browser streams microphone audio to the server via WebSocket.
-- Server forwards audio to Gemini Live session with input modality enabled.
+- Server forwards audio to a Gemini Live session with input modality enabled.
 - Detect paralinguistic signals only:
   - **Laughter** → proceed with confidence (the joke landed).
   - **Confusion** ("huh?", "wait—") → slow down, rephrase.

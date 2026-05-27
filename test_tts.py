@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import struct
 import types as builtin_types
 from types import SimpleNamespace
@@ -11,31 +12,28 @@ import pytest
 import tts
 
 
-class _MockSession:
-    def __init__(self, responses):
-        self._responses = responses
-        self.sent = []
+class _MockModels:
+    def __init__(self, response):
+        self.response = response
+        self.calls = []
 
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *args):
-        pass
-
-    async def send_client_content(self, **kwargs):
-        self.sent.append(kwargs)
-
-    async def receive(self):
-        for r in self._responses:
-            yield r
+    async def generate_content(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.response
 
 
-def _make_audio_response(pcm_bytes):
-    inline_data = SimpleNamespace(data=pcm_bytes)
+def _make_audio_response(pcm_bytes, mime_type="audio/L16;codec=pcm;rate=24000"):
+    inline_data = SimpleNamespace(data=pcm_bytes, mime_type=mime_type)
     part = SimpleNamespace(inline_data=inline_data)
-    model_turn = SimpleNamespace(parts=[part])
-    server_content = SimpleNamespace(model_turn=model_turn)
-    return SimpleNamespace(server_content=server_content)
+    content = SimpleNamespace(parts=[part])
+    candidate = SimpleNamespace(content=content)
+    return SimpleNamespace(candidates=[candidate])
+
+
+def _make_response_from_parts(parts):
+    content = SimpleNamespace(parts=parts)
+    candidate = SimpleNamespace(content=content)
+    return SimpleNamespace(candidates=[candidate])
 
 
 def test_map_voice_openai_passthrough() -> None:
@@ -109,22 +107,20 @@ def test_pcm_to_wav_custom_params() -> None:
     assert byte_rate == 48000 * 2 * 2
 
 
-def test_gemini_live_tts_missing_key(monkeypatch) -> None:
+def test_gemini_tts_missing_key(monkeypatch) -> None:
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
 
     with pytest.raises(RuntimeError, match="GEMINI_API_KEY or GOOGLE_API_KEY is not set"):
         asyncio.get_event_loop().run_until_complete(
-            tts.gemini_live_tts("hello"),
+            tts.gemini_tts("hello"),
         )
 
 
-def _patch_genai(mock_session):
+def _patch_genai(mock_models):
     mock_client = SimpleNamespace(
         aio=SimpleNamespace(
-            live=SimpleNamespace(
-                connect=lambda **kw: mock_session,
-            ),
+            models=mock_models,
         ),
     )
 
@@ -132,12 +128,10 @@ def _patch_genai(mock_session):
     mock_genai_module.Client = lambda **kw: mock_client
 
     mock_types_module = builtin_types.ModuleType("google.genai.types")
-    mock_types_module.LiveConnectConfig = lambda **kw: None
+    mock_types_module.GenerateContentConfig = lambda **kw: SimpleNamespace(**kw)
     mock_types_module.SpeechConfig = lambda **kw: None
     mock_types_module.VoiceConfig = lambda **kw: None
     mock_types_module.PrebuiltVoiceConfig = lambda **kw: None
-    mock_types_module.Content = lambda **kw: None
-    mock_types_module.Part = SimpleNamespace(from_text=lambda text: None)
 
     mock_google = builtin_types.ModuleType("google")
     mock_google.genai = mock_genai_module
@@ -149,54 +143,110 @@ def _patch_genai(mock_session):
     })
 
 
-def test_gemini_live_tts_returns_wav(monkeypatch) -> None:
+def test_gemini_tts_returns_wav(monkeypatch) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
 
     fake_pcm = b"\xab\xcd" * 500
-    mock_session = _MockSession([_make_audio_response(fake_pcm)])
+    mock_models = _MockModels(_make_audio_response(fake_pcm))
 
-    with _patch_genai(mock_session):
+    with _patch_genai(mock_models):
         result = asyncio.get_event_loop().run_until_complete(
-            tts.gemini_live_tts("Hello beach!", voice="Kore"),
+            tts.gemini_tts("Hello beach!", voice="Kore"),
         )
 
     assert result[:4] == b"RIFF"
     assert result[8:12] == b"WAVE"
     data_size = struct.unpack_from("<I", result, 40)[0]
     assert data_size == len(fake_pcm)
-    assert mock_session.sent
+    assert mock_models.calls
+    assert mock_models.calls[0]["model"] == tts.DEFAULT_GEMINI_TTS_MODEL
+    assert "Hello beach!" in mock_models.calls[0]["contents"]
 
 
-def test_gemini_live_tts_no_audio_raises(monkeypatch) -> None:
+def test_gemini_tts_no_audio_raises(monkeypatch) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
 
-    mock_session = _MockSession([
-        SimpleNamespace(server_content=None),
-    ])
+    mock_models = _MockModels(SimpleNamespace(candidates=[]))
 
-    with _patch_genai(mock_session):
+    with _patch_genai(mock_models):
         with pytest.raises(RuntimeError, match="no audio data"):
             asyncio.get_event_loop().run_until_complete(
-                tts.gemini_live_tts("Hello!"),
+                tts.gemini_tts("Hello!"),
             )
 
 
-def test_gemini_live_tts_multi_chunk_audio(monkeypatch) -> None:
+def test_gemini_tts_multi_part_audio(monkeypatch) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
 
     chunk1 = b"\x01\x02" * 100
     chunk2 = b"\x03\x04" * 100
-    mock_session = _MockSession([
-        _make_audio_response(chunk1),
-        _make_audio_response(chunk2),
-    ])
+    parts = [
+        SimpleNamespace(
+            inline_data=SimpleNamespace(
+                data=chunk1,
+                mime_type="audio/L16;codec=pcm;rate=24000",
+            )
+        ),
+        SimpleNamespace(
+            inline_data=SimpleNamespace(
+                data=chunk2,
+                mime_type="audio/L16;codec=pcm;rate=24000",
+            )
+        ),
+    ]
+    mock_models = _MockModels(_make_response_from_parts(parts))
 
-    with _patch_genai(mock_session):
+    with _patch_genai(mock_models):
         result = asyncio.get_event_loop().run_until_complete(
-            tts.gemini_live_tts("Hello!"),
+            tts.gemini_tts("Hello!"),
         )
 
     assert result[:4] == b"RIFF"
     data_size = struct.unpack_from("<I", result, 40)[0]
     assert data_size == len(chunk1) + len(chunk2)
     assert result[44:] == chunk1 + chunk2
+
+
+def test_gemini_tts_preserves_wav_response(monkeypatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+    wav = b"RIFF\x00\x00\x00\x00WAVEfake"
+    mock_models = _MockModels(_make_audio_response(wav, mime_type="audio/wav"))
+
+    with _patch_genai(mock_models):
+        result = asyncio.get_event_loop().run_until_complete(
+            tts.gemini_tts("Hello!"),
+        )
+
+    assert result == wav
+
+
+def test_gemini_tts_handles_dict_response_and_sample_rate(monkeypatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+    pcm = b"\x05\x06" * 10
+    response = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "inline_data": {
+                                "data": base64.b64encode(pcm).decode("ascii"),
+                                "mime_type": "audio/L16;codec=pcm;rate=16000",
+                            }
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    mock_models = _MockModels(response)
+
+    with _patch_genai(mock_models):
+        result = asyncio.get_event_loop().run_until_complete(
+            tts.gemini_tts("Hello!"),
+        )
+
+    assert struct.unpack_from("<I", result, 24)[0] == 16000
+    assert result[44:] == pcm
