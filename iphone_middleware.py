@@ -553,7 +553,7 @@ class FetchIphoneMiddleware:
         port: int = DEFAULT_PORT,
         model: str | None = None,
         vision_provider: VisionProvider = "openai",
-        tts_provider: TtsProvider = "openai",
+        tts_provider: TtsProvider = "gemini",
         tts_model: str = "tts-1",
         tts_voice: str = "echo",
         enable_realtime: bool = False,
@@ -1081,7 +1081,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--tts-provider",
         choices=("openai", "gemini"),
-        default="openai",
+        default="gemini",
         help="TTS provider. Gemini uses Live API for streaming voice.",
     )
     parser.add_argument("--tts-model", default="tts-1", help="OpenAI TTS model.")

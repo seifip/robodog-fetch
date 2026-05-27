@@ -140,7 +140,10 @@ def test_realtime_session_config_defaults() -> None:
 
 def test_realtime_client_secret_requires_openai_key(monkeypatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    middleware = iphone_middleware.FetchIphoneMiddleware(enable_realtime=True)
+    middleware = iphone_middleware.FetchIphoneMiddleware(
+        tts_provider="openai",
+        enable_realtime=True,
+    )
 
     with patch("iphone_middleware.OpenAI") as openai_cls:
         response = TestClient(middleware.server.app).post("/realtime/client-secret")
@@ -165,6 +168,7 @@ def test_realtime_client_secret_disabled_by_default(monkeypatch) -> None:
 def test_realtime_client_secret_uses_session_config(monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
     middleware = iphone_middleware.FetchIphoneMiddleware(
+        tts_provider="openai",
         enable_realtime=True,
         realtime_model="gpt-realtime-2",
         realtime_reasoning_effort="low",
@@ -191,6 +195,25 @@ def test_realtime_client_secret_uses_session_config(monkeypatch) -> None:
     assert session["reasoning"]["effort"] == "low"
     assert response.json()["client_secret"]["value"] == "rt-secret"
     assert response.json()["model"] == "gpt-realtime-2"
+
+
+def test_hello_defaults_to_gemini_speak_route() -> None:
+    middleware = iphone_middleware.FetchIphoneMiddleware()
+
+    with TestClient(middleware.server.app).websocket_connect("/fetch/ws") as ws:
+        hello = ws.receive_json()
+
+    assert hello["tts_provider"] == "gemini"
+    assert hello["audio_route"] == "speak"
+    assert hello["realtime_enabled"] is False
+
+
+def test_cli_defaults_to_gemini_tts(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["iphone_middleware"])
+
+    args = iphone_middleware._parse_args()
+
+    assert args.tts_provider == "gemini"
 
 
 def test_hello_advertises_gemini_speak_route() -> None:

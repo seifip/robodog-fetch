@@ -30,7 +30,7 @@ python -m dimos.experimental.fetch.iphone_middleware --host 0.0.0.0 --port 8455 
 
 # Use Gemini Live TTS as the primary browser audio route:
 export GEMINI_API_KEY=<KEY>
-python -m dimos.experimental.fetch.iphone_middleware --host 0.0.0.0 --port 8455 --tts-provider gemini --tts-voice Charon
+python -m dimos.experimental.fetch.iphone_middleware --host 0.0.0.0 --port 8455 --tts-voice Charon
 
 # Opt into OpenAI Realtime before /speak fallback:
 export OPENAI_API_KEY=<KEY>
@@ -94,7 +94,7 @@ Two **interaction phases** drive different prompts:
 3. LLM returns raw JSON → `_extract_json_object()` parses it (tolerates markdown fences, extra surrounding text).
 4. `_normalize_decision()` maps raw fields to canonical state/action/cmd_vel.
 5. Decision dict sent back to client over WebSocket or REST response.
-6. Client may call `/robot/action` (move, wave, dance, stand) or `/speak` based on the decision. `/speak` uses Gemini Live TTS when `--tts-provider gemini` is selected; otherwise it uses OpenAI TTS. OpenAI Realtime is opt-in with `--enable-realtime` and falls back to `/speak`.
+6. Client may call `/robot/action` (move, wave, dance, stand) or `/speak` based on the decision. `/speak` uses Gemini Live TTS by default; pass `--tts-provider openai` to use OpenAI TTS instead. OpenAI Realtime is opt-in with `--tts-provider openai --enable-realtime` and falls back to `/speak`.
 
 ## Key Gotchas
 
@@ -110,7 +110,7 @@ Two **interaction phases** drive different prompts:
   - OpenAI TTS and Realtime: `OPENAI_API_KEY`
   - Gemini Live TTS: `GEMINI_API_KEY` or `GOOGLE_API_KEY`
 
-- **Audio routing is provider-aware.** Browser speech uses `/speak` by default. `--tts-provider gemini` makes Gemini Live TTS the primary route. `--enable-realtime` only enables OpenAI Realtime when `--tts-provider openai`; the browser learns this from the WebSocket `hello` message fields `tts_provider`, `audio_route`, and `realtime_enabled`.
+- **Audio routing is provider-aware.** Browser speech uses `/speak` by default. Gemini Live TTS is the default route. `--enable-realtime` only enables OpenAI Realtime when `--tts-provider openai`; the browser learns this from the WebSocket `hello` message fields `tts_provider`, `audio_route`, and `realtime_enabled`.
 
 - **`/realtime/client-secret` is local-demo unauthenticated.** It is disabled by default and only responds when OpenAI Realtime is enabled, but it still needs an access gate before shared-network or public deployment.
 

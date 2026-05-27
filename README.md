@@ -94,18 +94,20 @@ python -m dimos.experimental.fetch.iphone_middleware \
 ```
 
 Gemini defaults to `gemini-3.5-flash`; pass `--model` only to override it.
-`GOOGLE_API_KEY` is also accepted as a fallback for Gemini. Browser audio is
-configured separately with `--tts-provider`.
+`GOOGLE_API_KEY` is also accepted as a fallback for Gemini. Browser audio
+defaults to Gemini Live TTS; pass `--tts-provider openai` only to use OpenAI
+TTS instead.
 
 ## Audio
 
-Browser speech uses `/speak` by default. With `--tts-provider gemini`, `/speak`
-uses Gemini Live TTS and requires `GEMINI_API_KEY` or `GOOGLE_API_KEY`. With
-`--tts-provider openai`, `/speak` uses OpenAI TTS and requires `OPENAI_API_KEY`.
+Browser speech uses `/speak` by default. The default `/speak` provider is
+Gemini Live TTS (`gemini-3.1-flash-live-preview`) and requires
+`GEMINI_API_KEY` or `GOOGLE_API_KEY`. With `--tts-provider openai`, `/speak`
+uses OpenAI TTS and requires `OPENAI_API_KEY`.
 
 OpenAI Realtime WebRTC is optional. Enable it explicitly with
-`--enable-realtime`; the browser will try Realtime first and fall back to
-`/speak` if setup or playback fails.
+`--tts-provider openai --enable-realtime`; the browser will try Realtime first
+and fall back to `/speak` if setup or playback fails.
 
 Demo note: `/realtime/client-secret` is intentionally unauthenticated for local
 live-demo use. Add an access gate before running this adapter on a shared or
@@ -130,7 +132,6 @@ export GEMINI_API_KEY=<YOUR_KEY>
 python -m dimos.experimental.fetch.iphone_middleware \
   --host 0.0.0.0 \
   --port 8455 \
-  --tts-provider gemini \
   --tts-voice Charon
 ```
 
