@@ -71,7 +71,7 @@ def _validate_model_for_provider(provider: VisionProvider, model: str) -> None:
 class FetchPolicyConfig:
     model: str | None = None
     vision_provider: VisionProvider = "openai"
-    max_line_chars: int = 120
+    max_line_chars: int = 180
     request_timeout_s: float = DEFAULT_REQUEST_TIMEOUT_S
     max_retries: int = DEFAULT_MAX_RETRIES
 
@@ -218,6 +218,76 @@ def _as_range(value: Any) -> RangeEstimate:
     return "unknown"
 
 
+def _clean_spoken_line(line: str) -> str:
+    line = re.sub(
+        r"^(?:find[_-]?guest|confirm[_-]?bottle)\b[\s:|\-\u2013\u2014]*",
+        "",
+        line.strip(),
+        flags=re.IGNORECASE,
+    )
+    line = re.sub(r"\*[^*]{0,80}\*\s*", "", line)
+    return re.sub(r"\s+", " ", line).strip()
+
+
+def _truncate_spoken_line(line: str, max_chars: int) -> str:
+    if len(line) <= max_chars:
+        return line
+    return (
+        re.sub(
+            r"\b(?:a|an|and|or|the|to|for|with|of|in|on|at|by)\.?$",
+            "",
+            line[:max_chars].rsplit(" ", 1)[0].rstrip(".,;:"),
+            flags=re.IGNORECASE,
+        ).rstrip(" ,;:")
+        + "."
+    )
+
+
+def _mentions_coke_container(lower_line: str) -> bool:
+    if re.search(r"\b(coke|cola|soda|bottle|drink)\b", lower_line):
+        return True
+    return (
+        re.search(r"\b(?:coke|cola|soda)\s+can\b", lower_line) is not None
+        or re.search(r"\bcan\s+of\s+(?:coke|cola|soda)\b", lower_line) is not None
+        or re.search(r"\b(?:the|a|your|that)\s+can\b", lower_line) is not None
+    )
+
+
+def _ensure_script_line(
+    line: str,
+    state: ApproachState,
+    interaction_phase: InteractionPhase,
+) -> str:
+    if state not in {"greet", "photo_ready", "wait_for_bottle"}:
+        return ""
+
+    cleaned = line.strip()
+    lower = cleaned.lower()
+
+    if state == "greet":
+        has_coke = _mentions_coke_container(lower)
+        has_back = re.search(r"\b(back|bag|pack)\b", lower) is not None
+        if has_coke and has_back:
+            return cleaned
+        suffix = "Grab a Coke from my back first, then I will take your instant photo."
+    elif interaction_phase == "confirm_bottle" and state == "wait_for_bottle":
+        has_coke = _mentions_coke_container(lower)
+        has_frame = re.search(r"\b(frame|camera|photo|front|center|hold|show)\b", lower) is not None
+        if has_coke and has_frame:
+            return cleaned
+        suffix = "Hold the Coke can out front and center yourself in the camera frame."
+    else:
+        has_coke = _mentions_coke_container(lower)
+        has_cue = re.search(r"\b(cheers|cheese|camera|photo|frame)\b", lower) is not None
+        if has_coke and has_cue:
+            return cleaned
+        suffix = "Hold the Coke up front and center. Cheers."
+
+    if not cleaned:
+        return suffix
+    return f"{cleaned.rstrip('.!?')}. {suffix}"
+
+
 def _cmd_for_target(bearing: Bearing, range_estimate: RangeEstimate) -> dict[str, float]:
     if range_estimate in {"inside_4m", "inside_1m"}:
         return {"linear_x": 0.0, "angular_z": 0.0, "duration_s": 0.0}
@@ -256,10 +326,7 @@ def _normalize_decision(
     safe_to_approach = bool(safety.get("safe_to_approach"))
     photo_ready = bool(raw.get("photo_ready") or framing.get("well_framed"))
     bottle_visible = bool(raw.get("bottle_visible") or framing.get("bottle_visible"))
-    line = str(raw.get("line") or "").strip()
-
-    if len(line) > config.max_line_chars:
-        line = line[: config.max_line_chars].rsplit(" ", 1)[0].rstrip(".,;:") + "."
+    line = _clean_spoken_line(str(raw.get("line") or ""))
 
     if interaction_phase == "confirm_bottle":
         if photo_ready:
@@ -279,6 +346,11 @@ def _normalize_decision(
 
     if state not in {"greet", "photo_ready", "wait_for_bottle"}:
         line = ""
+    else:
+        line = _truncate_spoken_line(
+            _ensure_script_line(line, state, interaction_phase),
+            config.max_line_chars,
+        )
 
     cmd = (
         _cmd_for_target(bearing, range_estimate)
@@ -400,21 +472,24 @@ class FetchPolicy:
         if interaction_phase == "confirm_bottle":
             goal = """
 Current phase: confirm_bottle.
-- The dog has already waved and offered a Coke in exchange for an instant photo.
-- Look for the same or primary person holding a Coke bottle, soda bottle, or clearly bottle-shaped drink from the dog's bag.
-- The person and bottle must both be visible and well framed for a photo. Prefer head/upper body plus bottle in frame; reject if the bottle is cropped out, hidden, or too blurry.
-- If ready, set photo_ready true, action "take_photo_dance", and line to a short direction ending with "cheese" or similar.
-- If the person is visible but the bottle is missing or framing is bad, set candidate_found true, photo_ready false, action "coach_photo", and line to one short positioning instruction.
+- The dog has already waved and told the person to take a Coke can from the dog's back.
+- Look for the same or primary person holding a Coke can, Coke bottle, soda can, or clearly bottle-shaped drink from the dog's back.
+- The person and Coke must both be visible and well framed for a photo. Prefer face/upper body plus the Coke held out front; reject if the Coke is cropped out, hidden, or too blurry.
+- If ready, set photo_ready true, action "take_photo_dance", and line to a short photographer cue that tells them to hold the Coke up/front and says "cheers", "cheese", or a funny camera phrase.
+- If the person is visible but the Coke is missing or framing is bad, set candidate_found true, photo_ready false, action "coach_photo", and line to one clear instruction: take/hold the Coke can, put it in front, and move/center themselves for the camera.
 """
         else:
             goal = """
 Current phase: find_guest.
-- Find one visible beachgoer who looks happy or relaxed and is lying down or reclining on a beach towel, sand, lounger, or beach chair.
-- Reject people who are working, reading, holding a phone, holding a drink, using a laptop/tablet, actively eating, or otherwise busy.
-- Prefer someone with hands free and an open posture.
+- Find the single best visible target for a Coca-Cola marketing robot dog giving out free Cokes and taking instant photos.
+- Pick anyone who looks chill and likely to enjoy the bit: visibly thirsty, curious, amused, playful, social, looking toward the dog/camera, or otherwise like they would be in for a good laugh and a photo.
+- Do not require the person to be lying down, reclining, alone, empty-handed, or fully idle.
+- Phone, book, laptop, food, or existing drink are not automatic rejects. Treat them as weak busy signals only when the person looks engrossed, unavailable, or likely to be annoyed.
+- Prefer open posture, visible face/upper body, a clear path, and enough room to stop safely.
 - The dog should approach only if the path looks safe, then stop within a few meters.
 - Generate the greeting only when the target is inside 4 meters.
-- The greeting must wave, make a highly personalized joke from visible non-sensitive appearance/context, and offer a Coke/drink in exchange for an instant photo.
+- The greeting must wave, make a highly personalized joke from visible non-sensitive appearance/context, clearly tell them to take a Coke can from the dog's back first, then tell them they get an instant photo.
+- Be explicit about the sequence: take Coke from my back, then pose for the photo with the Coke.
 """
 
         prompt = f"""
@@ -426,8 +501,10 @@ Goal:
 Safety and privacy:
 - Do not identify people or infer sensitive traits.
 - Do not comment on race, ethnicity, gender, age, disability, body size, attractiveness, or medical state.
-- Avoid insults and body-shaming. Keep humor based on visible, non-sensitive details: beach context, towel, hat, sunglasses, posture, lighting, colors, bags, or the heat.
+- Avoid insults and body-shaming. Keep humor based on visible, non-sensitive details: setting, posture, lighting, colors, bags, objects nearby, or what is happening in the scene.
 - The line must be specific to this frame. Mention at least one concrete visible detail from the person or scene. Do not write generic lines like "Want a drink or photo?" or "You look thirsty."
+- The line is spoken aloud. Do not include markdown, asterisks, phase labels, narration, or stage directions such as waving; the robot wave and photo sound are handled separately.
+- Keep the line friendly and directive: the person should always know the next physical step.
 - If the path looks blocked or the target is too close to another person or object, mark safe_to_approach false.
 
 Return only JSON with this shape:
@@ -438,9 +515,9 @@ Return only JSON with this shape:
     "bearing": "left|center|right|unknown",
     "range": "far|medium|near|inside_4m|inside_1m|unknown",
     "description": "short visible description",
-    "free_hand_evidence": "why hands seem free",
-    "lying_evidence": "why they appear lying down or reclining",
-    "happy_evidence": "why they appear relaxed or happy",
+    "free_hand_evidence": "why they seem able or likely to accept a Coke/photo",
+    "lying_evidence": "visible posture or stance; do not require reclining",
+    "happy_evidence": "why they seem receptive, amused, thirsty, curious, or social",
     "busy_signals": ["phone", "drink", "book", "work", "none"]
   }},
   "safety": {{
@@ -460,7 +537,7 @@ Return only JSON with this shape:
     "well_framed": false,
     "notes": "short framing notes"
   }},
-  "line": "one short dog line; it must reference visible context and the current phase",
+  "line": "one short spoken dog line; it must reference visible context and include no labels or stage directions",
   "notes": "short reasoning"
 }}
 
@@ -468,7 +545,7 @@ Range rule:
 - Use "inside_4m" when the camera is already close enough for greeting and a snapshot.
 - Use "inside_1m" only when the person is clearly within 1 meter.
 - Use "near" when the person is close but not clearly within 4 meters.
-- If the depth hint center_median_m, center_p10_m, frame_median_m, or frame_p10_m is 4.0 or less and a visible available person is in that region, prefer "inside_4m".
+- If the depth hint center_median_m, center_p10_m, frame_median_m, or frame_p10_m is 4.0 or less and a visible receptive target is in that region, prefer "inside_4m".
 
 {depth_note}
 """.strip()

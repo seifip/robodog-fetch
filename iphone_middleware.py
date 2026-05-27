@@ -21,6 +21,7 @@ import base64
 from datetime import datetime
 import os
 from pathlib import Path
+from threading import Event, Lock, Thread
 import time
 from typing import Any, cast
 
@@ -28,6 +29,8 @@ from dotenv import load_dotenv
 from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+import cv2
+import numpy as np
 from openai import OpenAI
 from unitree_webrtc_connect.constants import RTC_TOPIC
 
@@ -43,6 +46,8 @@ from dimos.experimental.fetch.policy import (
 from dimos.experimental.fetch.record3d_source import Record3DSource
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos.msgs.sensor_msgs.Image import Image
+from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.robot.unitree.connection import UnitreeWebRTCConnection
 from dimos.utils.logging_config import setup_logger
 from dimos.utils.path_utils import get_project_root
@@ -53,6 +58,412 @@ logger = setup_logger()
 STATIC_DIR = Path(__file__).parent / "static"
 CAPTURE_DIR = STATIC_DIR / "captures"
 DEFAULT_PORT = 8455
+GO2_LIDAR_STARTUP_TIMEOUT_S = 12.0
+GO2_LIDAR_STALE_TIMEOUT_S = 8.0
+
+
+def _safe_percentile(values: np.ndarray, percentile: float) -> float | None:
+    if values.size == 0:
+        return None
+    return float(np.percentile(values, percentile))
+
+
+def _go2_lidar_depth_hint(pointcloud: PointCloud2) -> dict[str, Any]:
+    points, _ = pointcloud.as_numpy()
+    points = np.asarray(points, dtype=np.float32)
+    if points.ndim != 2 or points.shape[1] < 3:
+        raise ValueError(f"Expected Go2 lidar point cloud with shape Nx3, got {points.shape}")
+
+    points = points[:, :3]
+    finite = np.isfinite(points).all(axis=1)
+    points = points[finite]
+    distances = np.linalg.norm(points, axis=1)
+    valid = (distances > 0.05) & (distances < 10.0)
+    points = points[valid]
+    distances = distances[valid]
+
+    if distances.size == 0:
+        return {
+            "source": "go2_lidar",
+            "units": "meters",
+            "point_count": 0,
+            "valid_fraction": 0.0,
+            "center_median_m": None,
+            "center_p10_m": None,
+            "frame_median_m": None,
+            "frame_p10_m": None,
+            "nearest_m": None,
+            "inside_1m_fraction": 0.0,
+            "inside_4m_fraction": 0.0,
+        }
+
+    height_band = np.abs(points[:, 2]) < 1.6
+    front_y = (points[:, 1] > 0.1) & (np.abs(points[:, 0]) < 1.2) & height_band
+    front_x = (points[:, 0] > 0.1) & (np.abs(points[:, 1]) < 1.2) & height_band
+
+    center_distances = distances
+    center_axis = "all"
+    if front_y.any():
+        center_distances = distances[front_y]
+        center_axis = "+y"
+    elif front_x.any():
+        center_distances = distances[front_x]
+        center_axis = "+x"
+
+    return {
+        "source": "go2_lidar",
+        "units": "meters",
+        "point_count": int(distances.size),
+        "valid_fraction": float(distances.size / max(1, finite.size)),
+        "center_axis": center_axis,
+        "center_median_m": _safe_percentile(center_distances, 50),
+        "center_p10_m": _safe_percentile(center_distances, 10),
+        "frame_median_m": _safe_percentile(distances, 50),
+        "frame_p10_m": _safe_percentile(distances, 10),
+        "nearest_m": float(np.min(distances)),
+        "inside_1m_fraction": float((distances < 1.0).mean()),
+        "inside_4m_fraction": float((distances < 4.0).mean()),
+        "front_y_point_count": int(front_y.sum()),
+        "front_x_point_count": int(front_x.sum()),
+    }
+
+
+def _go2_lidar_preview_jpeg(pointcloud: PointCloud2, size: int = 640) -> bytes:
+    points, _ = pointcloud.as_numpy()
+    points = np.asarray(points, dtype=np.float32)
+    image = np.zeros((size, size, 3), dtype=np.uint8)
+    image[:] = (16, 24, 28)
+
+    for meters in range(1, 7):
+        radius = int(meters * 42)
+        cv2.circle(image, (size // 2, int(size * 0.72)), radius, (42, 64, 68), 1)
+    cv2.line(image, (size // 2, 0), (size // 2, size), (38, 70, 76), 1)
+    cv2.line(image, (0, int(size * 0.72)), (size, int(size * 0.72)), (38, 70, 76), 1)
+
+    if points.ndim == 2 and points.shape[1] >= 3:
+        points = points[:, :3]
+        finite = np.isfinite(points).all(axis=1)
+        points = points[finite]
+        distances = np.linalg.norm(points, axis=1)
+        valid = (distances > 0.05) & (distances < 7.0) & (np.abs(points[:, 2]) < 1.8)
+        points = points[valid]
+        distances = distances[valid]
+
+        if points.size:
+            if len(points) > 50000:
+                stride = max(1, len(points) // 50000)
+                points = points[::stride]
+                distances = distances[::stride]
+
+            scale = 42.0
+            px = np.rint((size / 2.0) + points[:, 0] * scale).astype(np.int32)
+            py = np.rint((size * 0.72) - points[:, 1] * scale).astype(np.int32)
+            inside = (px >= 0) & (px < size) & (py >= 0) & (py < size)
+            px = px[inside]
+            py = py[inside]
+            distances = distances[inside]
+            if distances.size:
+                colors = cv2.applyColorMap(
+                    np.clip((255.0 - distances / 7.0 * 255.0), 0, 255).astype(np.uint8),
+                    cv2.COLORMAP_TURBO,
+                )
+                image[py, px] = colors[:, 0, :]
+
+    robot_center = (size // 2, int(size * 0.72))
+    cv2.circle(image, robot_center, 9, (235, 245, 245), -1)
+    cv2.circle(image, robot_center, 16, (80, 220, 220), 2)
+    cv2.putText(image, "Go2 LiDAR", (18, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (230, 245, 245), 2)
+    cv2.putText(image, "top-down", (18, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (140, 220, 220), 1)
+
+    ok, buffer = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+    if not ok:
+        raise RuntimeError("Failed to encode Go2 lidar preview")
+    return buffer.tobytes()
+
+
+class Go2Source:
+    """Persistent Go2 WebRTC camera/control bridge for Fetch."""
+
+    def __init__(self, ip: str, connection_method: str = "local_ap") -> None:
+        self.ip = ip
+        self.connection_method = connection_method
+        self._stop_event = Event()
+        self._lock = Lock()
+        self._thread: Thread | None = None
+        self._conn: UnitreeWebRTCConnection | None = None
+        self._video_subscription: Any | None = None
+        self._lidar_subscription: Any | None = None
+        self._latest: Image | None = None
+        self._latest_jpeg: bytes | None = None
+        self._latest_data_url: str | None = None
+        self._latest_at: float | None = None
+        self._latest_lidar_hint: dict[str, Any] | None = None
+        self._latest_lidar_jpeg: bytes | None = None
+        self._latest_lidar_at: float | None = None
+        self._connected_at: float | None = None
+        self._lidar_switch_sent_at: float | None = None
+        self._frames_received = 0
+        self._lidar_frames_received = 0
+        self._last_error: str | None = None
+        self._lidar_last_error: str | None = None
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = Thread(target=self._run, daemon=True, name="Go2Source")
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=3)
+            self._thread = None
+        self._disconnect()
+
+    def status(self) -> dict[str, Any]:
+        with self._lock:
+            now = time.time()
+            latest_age_s = now - self._latest_at if self._latest_at is not None else None
+            latest_lidar_age_s = (
+                now - self._latest_lidar_at if self._latest_lidar_at is not None else None
+            )
+            camera_streaming = latest_age_s is not None and latest_age_s <= 3.0
+            lidar_streaming = latest_lidar_age_s is not None and latest_lidar_age_s <= 3.0
+            return {
+                "enabled": True,
+                "running": self._thread is not None and self._thread.is_alive(),
+                "connected": self._conn is not None,
+                "connected_age_s": now - self._connected_at if self._connected_at else None,
+                "streaming": camera_streaming,
+                "stale": latest_age_s is not None and latest_age_s > 3.0,
+                "waiting_for_frames": self._conn is not None and self._frames_received == 0,
+                "frames_received": self._frames_received,
+                "latest_age_s": latest_age_s,
+                "last_error": self._last_error,
+                "lidar_streaming": lidar_streaming,
+                "lidar_stale": latest_lidar_age_s is not None and latest_lidar_age_s > 3.0,
+                "waiting_for_lidar": self._conn is not None and self._lidar_frames_received == 0,
+                "lidar_frames_received": self._lidar_frames_received,
+                "latest_lidar_age_s": latest_lidar_age_s,
+                "latest_depth_hint": self._latest_lidar_hint,
+                "lidar_switch_sent": self._lidar_switch_sent_at is not None,
+                "lidar_switch_age_s": (
+                    now - self._lidar_switch_sent_at if self._lidar_switch_sent_at else None
+                ),
+                "lidar_last_error": self._lidar_last_error,
+            }
+
+    def latest_jpeg(self) -> bytes | None:
+        with self._lock:
+            return self._latest_jpeg
+
+    def latest_data_url(self) -> str | None:
+        with self._lock:
+            return self._latest_data_url
+
+    def depth_hint(self) -> dict[str, Any]:
+        with self._lock:
+            if self._latest_lidar_hint is not None:
+                return self._latest_lidar_hint
+            return {
+                "source": "go2_lidar",
+                "units": "meters",
+                "available": False,
+                "reason": self._lidar_last_error or "waiting_for_lidar",
+            }
+
+    def latest_lidar_jpeg(self) -> bytes | None:
+        with self._lock:
+            return self._latest_lidar_jpeg
+
+    def preflight(self) -> dict[str, Any]:
+        def run(conn: UnitreeWebRTCConnection) -> dict[str, Any]:
+            responses = {"recovery_stand": self._sport(conn, 1006)}
+            time.sleep(2.0)
+            responses["balance_stand"] = self._sport(conn, 1002)
+            time.sleep(0.6)
+            responses["switch_joystick"] = self._sport(conn, 1027, {"data": True})
+            return {"enabled": True, "ok": True, "responses": responses}
+
+        return self._with_connection(run)
+
+    def action(self, payload: dict[str, Any]) -> dict[str, Any]:
+        action = str(payload.get("action") or "").strip()
+
+        def run(conn: UnitreeWebRTCConnection) -> dict[str, Any]:
+            if action == "move":
+                linear_x = float(payload.get("linear_x") or 0.0)
+                angular_z = float(payload.get("angular_z") or 0.0)
+                duration_s = max(0.0, min(2.0, float(payload.get("duration_s") or 0.0)))
+                twist = Twist(
+                    linear=Vector3(linear_x, 0.0, 0.0),
+                    angular=Vector3(0.0, 0.0, angular_z),
+                )
+                return {"enabled": True, "ok": conn.move(twist, duration=duration_s)}
+            if action == "wave":
+                return {"enabled": True, "ok": True, "response": self._sport(conn, 1016)}
+            if action == "dance":
+                return {"enabled": True, "ok": True, "response": self._sport(conn, 1022)}
+            if action == "stand":
+                return {"enabled": True, "ok": True, "response": self._sport(conn, 1002)}
+            return {"enabled": True, "ok": False, "message": f"Unknown robot action {action!r}"}
+
+        return self._with_connection(run)
+
+    def _run(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                conn = UnitreeWebRTCConnection(self.ip, connection_method=self.connection_method)
+                connected_at = time.time()
+                with self._lock:
+                    self._conn = conn
+                    self._connected_at = connected_at
+                    self._last_error = None
+                    starting_lidar_frames = self._lidar_frames_received
+
+                self._enable_lidar(conn)
+                self._lidar_subscription = conn.lidar_stream().subscribe(
+                    self._on_lidar,
+                    self._on_lidar_error,
+                )
+                self._video_subscription = conn.video_stream().subscribe(
+                    self._on_image,
+                    self._on_video_error,
+                )
+                logger.info("Connected to Go2 WebRTC camera/control")
+
+                while not self._stop_event.wait(timeout=0.5):
+                    now = time.time()
+                    with self._lock:
+                        conn_missing = self._conn is None
+                        lidar_frames = self._lidar_frames_received
+                        latest_lidar_at = self._latest_lidar_at
+                    if conn_missing:
+                        break
+                    if (
+                        lidar_frames == starting_lidar_frames
+                        and now - connected_at > GO2_LIDAR_STARTUP_TIMEOUT_S
+                    ):
+                        reason = "No Go2 LiDAR frames after connection; continuing camera-only"
+                        with self._lock:
+                            self._lidar_last_error = reason
+                    if (
+                        lidar_frames > starting_lidar_frames
+                        and latest_lidar_at is not None
+                        and now - latest_lidar_at > GO2_LIDAR_STALE_TIMEOUT_S
+                    ):
+                        reason = "Go2 LiDAR stream went stale; continuing camera-only"
+                        with self._lock:
+                            self._lidar_last_error = reason
+            except Exception as exc:
+                logger.error(f"Go2 WebRTC source failed: {exc}")
+                with self._lock:
+                    self._last_error = str(exc)
+                    self._conn = None
+                self._disconnect()
+                self._stop_event.wait(timeout=2.0)
+
+    def _on_image(self, image: Image) -> None:
+        encoded = image.to_base64(quality=78, max_width=960)
+        jpeg = base64.b64decode(encoded)
+        with self._lock:
+            self._latest = image
+            self._latest_jpeg = jpeg
+            self._latest_data_url = f"data:image/jpeg;base64,{encoded}"
+            self._latest_at = time.time()
+            self._frames_received += 1
+
+    def _on_lidar(self, pointcloud: PointCloud2) -> None:
+        try:
+            depth_hint = _go2_lidar_depth_hint(pointcloud)
+            lidar_jpeg = _go2_lidar_preview_jpeg(pointcloud)
+        except Exception as exc:
+            logger.warning(f"Go2 lidar summary failed: {exc}")
+            with self._lock:
+                self._lidar_last_error = str(exc)
+            return
+
+        with self._lock:
+            self._latest_lidar_hint = depth_hint
+            self._latest_lidar_jpeg = lidar_jpeg
+            self._latest_lidar_at = time.time()
+            self._lidar_frames_received += 1
+            self._lidar_last_error = None
+
+    def _on_video_error(self, exc: Exception) -> None:
+        logger.warning(f"Go2 WebRTC camera stream failed: {exc}")
+        with self._lock:
+            self._last_error = str(exc)
+
+    def _on_lidar_error(self, exc: Exception) -> None:
+        logger.warning(f"Go2 WebRTC lidar stream failed: {exc}")
+        with self._lock:
+            self._lidar_last_error = str(exc)
+
+    def _with_connection(self, callback: Any) -> dict[str, Any]:
+        with self._lock:
+            conn = self._conn
+            last_error = self._last_error
+        if conn is None:
+            return {
+                "enabled": True,
+                "ok": False,
+                "message": f"Go2 is not connected yet: {last_error or 'waiting'}",
+            }
+        try:
+            return callback(conn)
+        except Exception as exc:
+            logger.error(f"Go2 action failed: {exc}")
+            return {"enabled": True, "ok": False, "message": str(exc)}
+
+    @staticmethod
+    def _sport(
+        conn: UnitreeWebRTCConnection,
+        api_id: int,
+        parameter: dict[str, Any] | None = None,
+    ) -> Any:
+        payload: dict[str, Any] = {"api_id": api_id}
+        if parameter is not None:
+            payload["parameter"] = parameter
+        return conn.publish_request(RTC_TOPIC["SPORT_MOD"], payload)
+
+    def _enable_lidar(self, conn: UnitreeWebRTCConnection) -> None:
+        def publish() -> None:
+            conn.conn.datachannel.pub_sub.publish_without_callback(
+                RTC_TOPIC["ULIDAR_SWITCH"],
+                "ON",
+            )
+            conn.conn.datachannel.pub_sub.publish_without_callback(
+                RTC_TOPIC["ULIDAR_SWITCH"],
+                "on",
+            )
+
+        conn.loop.call_soon_threadsafe(publish)
+        with self._lock:
+            self._lidar_switch_sent_at = time.time()
+            self._lidar_last_error = None
+
+    def _disconnect(self) -> None:
+        subscriptions = (self._video_subscription, self._lidar_subscription)
+        self._video_subscription = None
+        self._lidar_subscription = None
+        for subscription in subscriptions:
+            if subscription is None:
+                continue
+            try:
+                subscription.dispose()
+            except Exception:
+                logger.debug("Go2 subscription dispose failed", exc_info=True)
+        with self._lock:
+            conn = self._conn
+            self._conn = None
+            self._connected_at = None
+        if conn is not None:
+            try:
+                conn.stop()
+            except Exception:
+                logger.debug("Go2 connection stop failed", exc_info=True)
 
 
 class FetchIphoneMiddleware:
@@ -88,23 +499,8 @@ class FetchIphoneMiddleware:
         )
         self._openai_client: OpenAI | None = None
         self._record3d_source = Record3DSource(record3d_device_index) if record3d else None
+        self._go2_source = Go2Source(robot_ip, robot_connection_method) if robot_ip else None
         self._setup_routes()
-
-    def _with_robot(self, callback: Any) -> Any:
-        if not self.robot_ip:
-            return {"enabled": False, "ok": False, "message": "Robot IP is not configured"}
-        conn = UnitreeWebRTCConnection(self.robot_ip, connection_method=self.robot_connection_method)
-        try:
-            return callback(conn)
-        finally:
-            conn.stop()
-
-    @staticmethod
-    def _sport(conn: UnitreeWebRTCConnection, api_id: int, parameter: dict[str, Any] | None = None) -> Any:
-        payload: dict[str, Any] = {"api_id": api_id}
-        if parameter is not None:
-            payload["parameter"] = parameter
-        return conn.publish_request(RTC_TOPIC["SPORT_MOD"], payload)
 
     def _get_openai_client(self) -> OpenAI | None:
         if not os.getenv("OPENAI_API_KEY"):
@@ -131,50 +527,128 @@ class FetchIphoneMiddleware:
 
         @self.server.app.get("/health")
         async def health() -> dict[str, Any]:
+            dog_enabled = self._go2_source is not None
+            record3d_enabled = self._record3d_source is not None
             return {
                 "ok": True,
                 "service": "fetch-iphone",
                 "port": self.port,
-                "robot_enabled": bool(self.robot_ip),
+                "vision_source": "dog" if dog_enabled else "record3d" if record3d_enabled else "browser",
+                "vision_provider": self.policy.config.vision_provider,
+                "vision_model": self.policy.config.model,
+                "dog_enabled": dog_enabled,
+                "robot_enabled": dog_enabled,
+                "record3d_enabled": record3d_enabled,
             }
 
         @self.server.app.post("/robot/preflight")
         async def robot_preflight() -> Any:
-            def run(conn: UnitreeWebRTCConnection) -> dict[str, Any]:
-                responses = {
-                    "recovery_stand": self._sport(conn, 1006),
-                }
-                time.sleep(2.0)
-                responses["balance_stand"] = self._sport(conn, 1002)
-                time.sleep(0.6)
-                responses["switch_joystick"] = self._sport(conn, 1027, {"data": True})
-                return {"enabled": True, "ok": True, "responses": responses}
-
-            return await asyncio.to_thread(self._with_robot, run)
+            if self._go2_source is None:
+                return {"enabled": False, "ok": False, "message": "Robot IP is not configured"}
+            return await asyncio.to_thread(self._go2_source.preflight)
 
         @self.server.app.post("/robot/action")
         async def robot_action(payload: dict[str, Any]) -> Any:
-            action = str(payload.get("action") or "").strip()
+            if self._go2_source is None:
+                return {"enabled": False, "ok": False, "message": "Robot IP is not configured"}
+            return await asyncio.to_thread(self._go2_source.action, payload)
 
-            def run(conn: UnitreeWebRTCConnection) -> dict[str, Any]:
-                if action == "move":
-                    linear_x = float(payload.get("linear_x") or 0.0)
-                    angular_z = float(payload.get("angular_z") or 0.0)
-                    duration_s = max(0.0, min(2.0, float(payload.get("duration_s") or 0.0)))
-                    twist = Twist(
-                        linear=Vector3(linear_x, 0.0, 0.0),
-                        angular=Vector3(0.0, 0.0, angular_z),
-                    )
-                    return {"enabled": True, "ok": conn.move(twist, duration=duration_s)}
-                if action == "wave":
-                    return {"enabled": True, "ok": True, "response": self._sport(conn, 1016)}
-                if action == "dance":
-                    return {"enabled": True, "ok": True, "response": self._sport(conn, 1022)}
-                if action == "stand":
-                    return {"enabled": True, "ok": True, "response": self._sport(conn, 1002)}
-                return {"enabled": True, "ok": False, "message": f"Unknown robot action {action!r}"}
+        @self.server.app.get("/dog/status")
+        async def dog_status() -> dict[str, Any]:
+            if self._go2_source is None:
+                return {"enabled": False}
+            return self._go2_source.status()
 
-            return await asyncio.to_thread(self._with_robot, run)
+        @self.server.app.get("/dog/latest.jpg")
+        async def dog_latest_jpg() -> Response:
+            if self._go2_source is None:
+                return JSONResponse({"error": "Go2 camera is not enabled"}, status_code=404)
+            frame = self._go2_source.latest_jpeg()
+            if frame is None:
+                return JSONResponse({"error": "No Go2 camera frame received yet"}, status_code=404)
+            return Response(content=frame, media_type="image/jpeg")
+
+        @self.server.app.get("/dog/stream.mjpg")
+        async def dog_stream() -> Any:
+            if self._go2_source is None:
+                return JSONResponse({"error": "Go2 camera is not enabled"}, status_code=404)
+
+            async def stream_frames() -> Any:
+                previous: bytes | None = None
+                while True:
+                    frame = self._go2_source.latest_jpeg()
+                    if frame is not None and frame != previous:
+                        previous = frame
+                        yield (
+                            b"--frame\r\n"
+                            b"Content-Type: image/jpeg\r\n"
+                            b"Cache-Control: no-cache\r\n\r\n"
+                            + frame
+                            + b"\r\n"
+                        )
+                    await asyncio.sleep(0.03)
+
+            return StreamingResponse(
+                stream_frames(),
+                media_type="multipart/x-mixed-replace; boundary=frame",
+                headers={"Cache-Control": "no-cache"},
+            )
+
+        @self.server.app.get("/dog/lidar.jpg")
+        async def dog_lidar_jpg() -> Response:
+            if self._go2_source is None:
+                return JSONResponse({"error": "Go2 LiDAR is not enabled"}, status_code=404)
+            frame = self._go2_source.latest_lidar_jpeg()
+            if frame is None:
+                return JSONResponse({"error": "No Go2 LiDAR frame received yet"}, status_code=404)
+            return Response(content=frame, media_type="image/jpeg")
+
+        @self.server.app.get("/dog/lidar-stream.mjpg")
+        async def dog_lidar_stream() -> Any:
+            if self._go2_source is None:
+                return JSONResponse({"error": "Go2 LiDAR is not enabled"}, status_code=404)
+
+            async def stream_frames() -> Any:
+                previous: bytes | None = None
+                while True:
+                    frame = self._go2_source.latest_lidar_jpeg()
+                    if frame is not None and frame != previous:
+                        previous = frame
+                        yield (
+                            b"--frame\r\n"
+                            b"Content-Type: image/jpeg\r\n"
+                            b"Cache-Control: no-cache\r\n\r\n"
+                            + frame
+                            + b"\r\n"
+                        )
+                    await asyncio.sleep(0.03)
+
+            return StreamingResponse(
+                stream_frames(),
+                media_type="multipart/x-mixed-replace; boundary=frame",
+                headers={"Cache-Control": "no-cache"},
+            )
+
+        @self.server.app.post("/dog/analyze")
+        async def dog_analyze(payload: dict[str, Any] | None = None) -> Any:
+            if self._go2_source is None:
+                return JSONResponse({"error": "Go2 camera is not enabled"}, status_code=404)
+            status = self._go2_source.status()
+            if not status["streaming"]:
+                return JSONResponse(
+                    {"error": "Go2 camera is not streaming yet", "dog": status},
+                    status_code=409,
+                )
+            image_data_url = self._go2_source.latest_data_url()
+            if image_data_url is None:
+                return JSONResponse({"error": "No Go2 camera frame received yet"}, status_code=404)
+            interaction_phase = str((payload or {}).get("interaction_phase") or "find_guest")
+            return await asyncio.to_thread(
+                self.policy.analyze_frame,
+                image_data_url,
+                self._go2_source.depth_hint(),
+                interaction_phase,
+            )
 
         @self.server.app.get("/record3d/status")
         async def record3d_status() -> dict[str, Any]:
@@ -267,6 +741,14 @@ class FetchIphoneMiddleware:
                     image_bytes = base64.b64decode(encoded)
                 except (ValueError, base64.binascii.Error):
                     return JSONResponse({"error": "Invalid image_data_url"}, status_code=400)
+            elif self._go2_source is not None and str(payload.get("source") or "") == "dog":
+                status = self._go2_source.status()
+                if not status["streaming"]:
+                    return JSONResponse(
+                        {"error": "Go2 camera is not streaming yet", "dog": status},
+                        status_code=409,
+                    )
+                image_bytes = self._go2_source.latest_jpeg()
             elif self._record3d_source is not None:
                 frame = self._record3d_source.latest()
                 if frame is not None:
@@ -331,6 +813,37 @@ class FetchIphoneMiddleware:
                 while True:
                     message = await ws.receive_json()
                     message_type = message.get("type")
+                    if message_type == "dog_frame":
+                        if self._go2_source is None:
+                            await ws.send_json({"type": "error", "message": "Go2 camera is not enabled"})
+                            continue
+                        status = self._go2_source.status()
+                        if not status["streaming"]:
+                            await ws.send_json(
+                                {
+                                    "type": "error",
+                                    "message": "Go2 camera is not streaming yet",
+                                    "dog": status,
+                                }
+                            )
+                            continue
+                        image_data_url = self._go2_source.latest_data_url()
+                        if image_data_url is None:
+                            await ws.send_json(
+                                {"type": "error", "message": "No Go2 camera frame received yet"}
+                            )
+                            continue
+                        decision = await asyncio.to_thread(
+                            self.policy.analyze_frame,
+                            image_data_url,
+                            self._go2_source.depth_hint(),
+                            str(message.get("interaction_phase") or "find_guest"),
+                        )
+                        decision["frame_id"] = message.get("frame_id")
+                        decision["dog"] = self._go2_source.status()
+                        await ws.send_json(decision)
+                        continue
+
                     if message_type == "record3d_frame":
                         if self._record3d_source is None:
                             await ws.send_json(
@@ -356,7 +869,10 @@ class FetchIphoneMiddleware:
 
                     if message_type != "frame":
                         await ws.send_json(
-                            {"type": "error", "message": "Expected frame or record3d_frame message"}
+                            {
+                                "type": "error",
+                                "message": "Expected frame, dog_frame, or record3d_frame message",
+                            }
                         )
                         continue
 
@@ -380,6 +896,8 @@ class FetchIphoneMiddleware:
                     pass
 
     def run(self, ssl: bool = True) -> None:
+        if self._go2_source is not None:
+            self._go2_source.start()
         if self._record3d_source is not None:
             self._record3d_source.start()
         if ssl:

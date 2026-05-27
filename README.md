@@ -8,17 +8,18 @@ WebSocket, and the server returns motion/speech/photo decisions.
 ## Behavior
 
 1. Run the robot preflight: recovery stand, balance stand, and joystick handoff.
-2. Search for a happy or relaxed beachgoer who is lying down or reclining.
-3. Reject people who appear busy, holding a phone, holding a drink, reading, working, or using a laptop/tablet.
+2. Search for the best visible Coke/photo target: anyone who looks chill, thirsty, amused, curious, playful, social, or likely to enjoy a free Coke from a robot dog.
+3. Treat phone, book, laptop, food, or drink as weak busy signals only when the person looks engrossed or unavailable.
 4. Approach only if the path looks safe.
 5. Stop once the target is within 4 meters.
 6. Wave and say a personalized joke based on visible, non-sensitive appearance/context.
-7. Offer a Coke/drink in exchange for an instant photo.
-8. Wait until the person is holding the bottle and both the person and bottle are well framed.
-9. Say a cheese cue, save the photo, and trigger a dance.
+7. Tell the person to take a Coke can from the dog's back first, then pose for an instant photo.
+8. Coach them to hold the Coke can out front and center themselves in the frame.
+9. Say a photographer cue, save the photo, play a print sound, tell them the photo is ready on the dog's head, and trigger a dance.
 
 The prototype does not infer identity or sensitive traits. Humor is constrained to
-visible beach context such as hats, sunglasses, towels, heat, shade, and posture.
+visible non-sensitive context such as setting, posture, lighting, colors, bags,
+objects nearby, or what is happening in the scene.
 
 ## Run
 
@@ -41,7 +42,7 @@ cd /Users/seifip/GitHub/fetch/dimos
 python -m dimos.experimental.fetch.iphone_middleware \
   --host 0.0.0.0 \
   --port 8455 \
-  --record3d \
+  --vision-provider gemini \
   --robot-ip 192.168.12.1 \
   --robot-connection-method local_ap
 ```
@@ -52,7 +53,7 @@ Open this on the iPhone or Mac:
 http://127.0.0.1:8455/fetch
 ```
 
-Tap `Record` to start the 10 second scan loop.
+Tap `Record` to start the 1 second scan loop.
 
 ## iPhone Depth
 
@@ -117,8 +118,8 @@ still uses OpenAI TTS, so set `OPENAI_API_KEY` only if you want browser audio.
   "target": {
     "bearing": "center",
     "range": "near",
-    "description": "person reclining on a towel",
-    "free_hand_evidence": "both hands are visible and empty",
+    "description": "person smiling toward the dog",
+    "free_hand_evidence": "they are looking over and seem able to take a Coke/photo",
     "busy_signals": ["none"]
   },
   "simulated_cmd_vel": {
@@ -135,7 +136,7 @@ still uses OpenAI TTS, so set `OPENAI_API_KEY` only if you want browser audio.
     "well_framed": false,
     "notes": ""
   },
-  "line": "Your pink umbrella is doing heroic shade work. Want a Coke for one instant photo?"
+  "line": "That counter stance says you are ready for the tiny robot VIP treatment. Grab a Coke from my back first, then I will take your instant photo."
 }
 ```
 

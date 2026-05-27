@@ -10,7 +10,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Monoton&family=Rajdhani:wght@500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Mr+Dafoe&family=Rajdhani:wght@500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
     <style>
@@ -99,6 +99,8 @@
       }
 
       video,
+      .dog-preview,
+      .dog-lidar-preview,
       .record3d-preview,
       .depth-preview,
       .photo img {
@@ -109,6 +111,9 @@
       }
 
       .rgbd-grid,
+      .dog-grid,
+      .dog-preview,
+      .dog-lidar-preview,
       .record3d-preview,
       .depth-preview {
         display: none;
@@ -116,6 +121,21 @@
 
       body.record3d-mode video {
         display: none;
+      }
+
+      body.dog-mode video,
+      body.dog-mode .rgbd-grid,
+      body.dog-mode .idle-feed {
+        display: none;
+      }
+
+      body.dog-mode .dog-grid {
+        display: grid;
+      }
+
+      body.dog-mode .dog-preview,
+      body.dog-mode .dog-lidar-preview {
+        display: block;
       }
 
       body.record3d-mode .rgbd-grid {
@@ -220,7 +240,7 @@
       .line {
         margin: 0;
         min-height: 52px;
-        font-size: 18px;
+        font-size: 24px;
         line-height: 1.35;
       }
 
@@ -311,6 +331,7 @@
         --radius: 8px;
         --font-body: "Source Sans 3", "Segoe UI", sans-serif;
         --font-display: "Rajdhani", "Aptos Display", sans-serif;
+        --font-logo: "Mr Dafoe", "Brush Script MT", cursive;
       }
 
       html {
@@ -373,8 +394,7 @@
       .eyebrow,
       .panel-title,
       .feed-label,
-      dt,
-      .metric-label {
+      dt {
         color: var(--faint);
         font-family: var(--font-display);
         font-size: 12px;
@@ -393,8 +413,9 @@
       }
 
       .record-toggle {
-        min-width: 128px;
+        min-width: 112px;
         min-height: 42px;
+        padding: 8px 12px;
         border: 1px solid color-mix(in oklch, var(--danger) 78%, transparent);
         border-radius: var(--radius);
         background: oklch(16% 0.016 20 / 0.82);
@@ -426,24 +447,6 @@
         50% {
           box-shadow: 0 0 0 6px color-mix(in oklch, var(--danger) 0%, transparent);
         }
-      }
-
-      .metric {
-        display: grid;
-        gap: 2px;
-        min-width: 86px;
-        padding: 8px 10px;
-        border: 1px solid var(--line);
-        border-radius: var(--radius);
-        background: oklch(19% 0.016 175 / 0.8);
-      }
-
-      .metric strong {
-        color: var(--ink);
-        font-family: var(--font-display);
-        font-size: 16px;
-        font-weight: 700;
-        line-height: 1;
       }
 
       .status {
@@ -481,7 +484,8 @@
       }
 
       .status[data-state~="connecting"]::before,
-      .status[data-state~="error"]::before {
+      .status[data-state~="error"]::before,
+      .status[data-state~="dog-offline"]::before {
         background: var(--amber);
         box-shadow: 0 0 0 4px color-mix(in oklch, var(--amber) 18%, transparent);
       }
@@ -561,7 +565,8 @@
         content: "";
       }
 
-      .rgbd-grid {
+      .rgbd-grid,
+      .dog-grid {
         position: absolute;
         inset: 0;
         grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -569,7 +574,8 @@
         background: var(--line);
       }
 
-      .rgbd-pane {
+      .rgbd-pane,
+      .dog-pane {
         position: relative;
         min-width: 0;
         min-height: 0;
@@ -577,7 +583,8 @@
         background: oklch(8% 0.015 175);
       }
 
-      .rgbd-pane .stream-label {
+      .rgbd-pane .stream-label,
+      .dog-pane .stream-label {
         position: absolute;
         top: var(--space-sm);
         left: var(--space-sm);
@@ -586,12 +593,61 @@
         border-radius: 6px;
         padding: 5px 8px;
         background: oklch(10% 0.014 175 / 0.72);
-        color: var(--ink);
+        color: oklch(98% 0.012 195);
         font-family: var(--font-display);
         font-size: 12px;
         font-weight: 700;
         letter-spacing: 0.08em;
         text-transform: uppercase;
+      }
+
+      body.dog-mode .dog-grid {
+        background: transparent;
+      }
+
+      body.dog-mode .dog-camera-pane {
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+      }
+
+      body.dog-mode .dog-lidar-pane {
+        position: absolute;
+        top: var(--space-md);
+        right: var(--space-md);
+        z-index: 4;
+        width: clamp(150px, 22%, 260px);
+        aspect-ratio: 1;
+        border: 1px solid oklch(100% 0 0 / 0.18);
+        border-radius: 8px;
+        box-shadow:
+          0 18px 52px oklch(0% 0 0 / 0.46),
+          inset 0 0 0 1px oklch(100% 0 0 / 0.08);
+        background: oklch(8% 0.015 175 / 0.84);
+      }
+
+      body.dog-mode .dog-lidar-pane .stream-label {
+        top: 8px;
+        left: 8px;
+      }
+
+      .dog-lidar-empty {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 38px 14px 14px;
+        color: oklch(90% 0.03 195 / 0.72);
+        font-family: var(--font-display);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-align: center;
+        text-transform: uppercase;
+      }
+
+      .dog-lidar-pane.has-lidar .dog-lidar-empty {
+        display: none;
       }
 
       .reticle {
@@ -918,7 +974,7 @@
         min-height: 52px;
         color: oklch(94% 0.018 100);
         font-family: var(--font-display);
-        font-size: 22px;
+        font-size: 30px;
         font-weight: 600;
         line-height: 1.15;
       }
@@ -1094,22 +1150,16 @@
       .eyebrow,
       .feed-label,
       .panel-title,
-      dt,
-      .metric-label {
+      dt {
         color: color-mix(in oklch, var(--accent) 68%, var(--muted));
       }
 
-      .metric,
       .status,
       section.bp5-card {
         border-color: color-mix(in oklch, var(--accent) 26%, var(--line));
         background:
           linear-gradient(180deg, color-mix(in oklch, var(--panel-strong) 82%, var(--pink) 18%), var(--panel)),
           var(--panel);
-      }
-
-      .metric strong {
-        color: color-mix(in oklch, var(--sunset) 46%, var(--ink));
       }
 
       .status {
@@ -1121,6 +1171,11 @@
       .status[data-state~="running"]::before {
         background: var(--accent);
         box-shadow: 0 0 0 4px color-mix(in oklch, var(--accent) 18%, transparent), 0 0 18px var(--accent);
+      }
+
+      .status[data-state~="dog-offline"]::before {
+        background: var(--amber);
+        box-shadow: 0 0 0 4px color-mix(in oklch, var(--amber) 18%, transparent), 0 0 18px var(--amber);
       }
 
       .record-toggle {
@@ -1316,12 +1371,10 @@
       .eyebrow,
       .feed-label,
       .panel-title,
-      dt,
-      .metric-label {
+      dt {
         color: color-mix(in oklch, var(--accent) 56%, oklch(25% 0.08 216));
       }
 
-      .metric,
       .status,
       section.bp5-card {
         border-color: color-mix(in oklch, var(--accent) 42%, white);
@@ -1332,7 +1385,6 @@
         backdrop-filter: blur(16px) saturate(1.25);
       }
 
-      .metric strong,
       dd,
       .log-message {
         color: var(--ink);
@@ -1466,6 +1518,7 @@
         --accent: oklch(75% 0.13 190);
         --accent-ink: oklch(19% 0.05 232);
         --pink: oklch(72% 0.18 348);
+        --logo-purple: oklch(62% 0.24 310);
         --coral-hot: oklch(70% 0.16 28);
         --sunset: oklch(84% 0.12 74);
         --amber: oklch(82% 0.12 78);
@@ -1491,7 +1544,6 @@
       }
 
       h1,
-      .metric strong,
       dd,
       .log-message,
       .line {
@@ -1502,12 +1554,10 @@
       .eyebrow,
       .feed-label,
       .panel-title,
-      dt,
-      .metric-label {
+      dt {
         color: color-mix(in oklch, var(--accent) 62%, oklch(25% 0.06 230));
       }
 
-      .metric,
       .status,
       section.bp5-card {
         border-color: var(--line);
@@ -1527,8 +1577,16 @@
         box-shadow: 0 0 0 4px color-mix(in oklch, var(--accent) 18%, transparent);
       }
 
+      .status[data-state~="dog-offline"]::before {
+        background: var(--amber);
+        box-shadow: 0 0 0 4px color-mix(in oklch, var(--amber) 18%, transparent);
+      }
+
       .record-toggle,
       button.bp5-button.record-toggle {
+        min-width: 112px;
+        min-height: 42px;
+        padding: 8px 12px;
         border-color: color-mix(in oklch, var(--pink) 54%, var(--line));
         background:
           linear-gradient(180deg, oklch(100% 0.018 195), color-mix(in oklch, var(--pink) 10%, white)),
@@ -1563,7 +1621,11 @@
         display: none;
       }
 
-      body:not(.record3d-mode) video {
+      body.dog-mode .idle-feed {
+        display: none;
+      }
+
+      body:not(.record3d-mode):not(.dog-mode) video {
         display: none;
       }
 
@@ -1639,10 +1701,12 @@
       main {
         height: calc(100dvh - 73px);
         padding: 18px 24px 10px;
+        overflow: visible;
       }
 
       aside {
         grid-template-rows: auto auto minmax(0, 1fr);
+        overflow: visible;
       }
 
       .brand {
@@ -1650,27 +1714,64 @@
       }
 
       h1 {
-        font-family: "Monoton", var(--font-display);
-        font-size: 34px;
+        font-family: var(--font-logo);
+        font-size: 42px;
         font-weight: 400;
         letter-spacing: 0;
-        line-height: 0.98;
-        color: color-mix(in oklch, var(--pink) 50%, var(--accent-ink));
+        line-height: 1;
+        color: oklch(99% 0.01 345);
+        paint-order: stroke fill;
+        -webkit-text-stroke: 0.45px oklch(14% 0.05 305 / 0.78);
+        text-shadow:
+          0 1px 0 oklch(8% 0.04 305 / 0.86),
+          1px 0 0 oklch(8% 0.04 305 / 0.62),
+          -1px 0 0 oklch(8% 0.04 305 / 0.48),
+          0 0 3px color-mix(in oklch, white 72%, var(--pink)),
+          0 0 9px color-mix(in oklch, var(--pink) 82%, white),
+          0 0 20px color-mix(in oklch, var(--pink) 72%, transparent),
+          0 0 46px color-mix(in oklch, var(--logo-purple) 58%, transparent),
+          0 0 82px color-mix(in oklch, var(--pink) 34%, transparent);
       }
 
       .photo-frame {
-        aspect-ratio: 1 / 1;
+        aspect-ratio: 1 / 1.16;
         height: auto;
         max-height: none;
-        background: white;
+        padding: 16px 16px 68px;
+        border: 1px solid oklch(87% 0.035 192);
+        border-radius: 4px;
+        background:
+          linear-gradient(180deg, oklch(99.5% 0.003 195), oklch(97.5% 0.004 195)),
+          white;
+        box-shadow:
+          0 18px 34px oklch(45% 0.06 220 / 0.18),
+          0 1px 0 oklch(100% 0 0 / 0.9) inset;
       }
 
       .photo-frame::before {
+        inset: 16px 16px 68px;
+        border: 1px solid oklch(90% 0.026 196);
+        background: oklch(99% 0.006 195);
         color: color-mix(in oklch, var(--pink) 52%, var(--accent));
       }
 
-      .photo-frame::after {
+      .photo-frame:has(img[src]:not([src=""]))::before {
         display: none;
+      }
+
+      .photo-frame img {
+        position: relative;
+        z-index: 1;
+        border: 1px solid oklch(90% 0.026 196);
+        background: oklch(99% 0.006 195);
+      }
+
+      .photo-frame::after {
+        inset: auto 22% 30px;
+        height: 1px;
+        padding: 0;
+        background: color-mix(in oklch, var(--pink) 18%, transparent);
+        content: "";
       }
 
       @media (max-width: 820px) {
@@ -1768,18 +1869,6 @@
         <h1>Fetch</h1>
       </div>
       <div class="header-metrics" aria-label="System status">
-        <div class="metric">
-          <span class="metric-label">Vision</span>
-          <strong>Live</strong>
-        </div>
-        <div class="metric">
-          <span class="metric-label">Policy</span>
-          <strong>Guarded</strong>
-        </div>
-        <div class="metric">
-          <span class="metric-label">Offer</span>
-          <strong>Photo</strong>
-        </div>
         <div id="status" class="status" data-state="offline">offline</div>
         <button id="recordToggle" class="bp5-button record-toggle" data-running="false">Record</button>
       </div>
@@ -1797,12 +1886,28 @@
           </div>
           <div class="feed-meta">
             <span class="bp5-icon bp5-icon-satellite" aria-hidden="true"></span>
-            Record3D RGBD
+            <span id="sourceLabel">Record3D RGBD</span>
           </div>
         </div>
 
         <div class="video-shell">
           <img id="idleFeed" class="idle-feed" src="/fetch/static/idle-camera-feed.png" alt="" />
+          <div class="dog-grid" aria-label="Go2 WebRTC camera and LiDAR streams">
+            <div class="dog-pane dog-camera-pane">
+              <img
+                id="dogPreview"
+                class="dog-preview"
+                src="/fetch/static/idle-camera-feed.png"
+                alt="Live Go2 camera feed"
+              />
+              <span class="stream-label">Camera</span>
+            </div>
+            <div class="dog-pane dog-lidar-pane">
+              <img id="dogLidarPreview" class="dog-lidar-preview" alt="" />
+              <span class="stream-label">LiDAR</span>
+              <span id="dogLidarEmpty" class="dog-lidar-empty">LiDAR waiting</span>
+            </div>
+          </div>
           <video id="video" playsinline muted autoplay></video>
           <div class="rgbd-grid" aria-label="Record3D RGB and LiDAR depth streams">
             <div class="rgbd-pane">
@@ -1825,20 +1930,12 @@
         </div>
 
         <section class="bp5-card events-panel">
-          <div class="panel-head">
-            <h2 class="panel-title">Events</h2>
-            <span class="bp5-tag bp5-minimal">latest first</span>
-          </div>
           <div id="log" class="log"></div>
         </section>
       </div>
 
       <aside>
         <section class="bp5-card">
-          <div class="panel-head">
-            <h2 class="panel-title">Decision</h2>
-            <span class="bp5-tag bp5-minimal">policy output</span>
-          </div>
           <dl>
             <dt>State</dt>
             <dd id="decisionState">idle</dd>
@@ -1852,17 +1949,12 @@
         </section>
 
         <section class="bp5-card">
-          <div class="panel-head">
-            <h2 class="panel-title">Line</h2>
-            <span class="bp5-icon bp5-icon-comment" aria-hidden="true"></span>
-          </div>
-          <p id="line" class="line">Waiting for an available person.</p>
+          <p id="line" class="line">Waiting for a good Coke/photo target.</p>
         </section>
 
         <section class="photo bp5-card">
           <div class="panel-head">
             <h2 class="panel-title">Instant Photo</h2>
-            <span class="bp5-icon bp5-icon-media" aria-hidden="true"></span>
           </div>
           <div class="photo-frame">
             <img id="photoPreview" alt="" />
@@ -1888,11 +1980,15 @@
         frameRate: document.getElementById("frameRate"),
         motion: document.getElementById("motion"),
         rgbdStatus: document.getElementById("rgbdStatus"),
+        sourceLabel: document.getElementById("sourceLabel"),
         decisionState: document.getElementById("decisionState"),
         target: document.getElementById("target"),
         evidence: document.getElementById("evidence"),
         offer: document.getElementById("offer"),
         line: document.getElementById("line"),
+        dogPreview: document.getElementById("dogPreview"),
+        dogLidarPreview: document.getElementById("dogLidarPreview"),
+        dogLidarEmpty: document.getElementById("dogLidarEmpty"),
         record3dPreview: document.getElementById("record3dPreview"),
         depthPreview: document.getElementById("depthPreview"),
         photoPreview: document.getElementById("photoPreview"),
@@ -1901,12 +1997,15 @@
         audio: document.getElementById("audio"),
       };
 
+      const DOG_PLACEHOLDER_SRC = "/fetch/static/idle-camera-feed.png";
+      const SCAN_INTERVAL_MS = 1000;
+
       const state = {
         ws: null,
         stream: null,
         scanning: false,
         workflow: "find_guest",
-        useRecord3d: false,
+        visionSource: "browser",
         pendingFrame: false,
         speaking: false,
         photoInProgress: false,
@@ -1917,12 +2016,47 @@
         lastPhotoAt: 0,
         timer: null,
         statusTimer: null,
+        transportStatus: "offline",
+        lastDogFrames: 0,
+        lastDogLidarFrames: 0,
+        dogConnectionActive: false,
+        dogCameraStreaming: false,
+        dogCameraLive: false,
+        dogLidarLive: false,
         lastRecord3dFrames: 0,
+        audioContext: null,
       };
 
       function setStatus(text) {
-        els.status.textContent = text;
-        els.status.dataset.state = text.toLowerCase().replace(/\s+/g, "-");
+        state.transportStatus = text;
+        renderStatus();
+      }
+
+      function setStatusPill(label, stateKey) {
+        els.status.textContent = label;
+        els.status.dataset.state = stateKey.toLowerCase().replace(/\s+/g, "-");
+      }
+
+      function updateRecordAvailability() {
+        const disabled = state.visionSource === "dog" && !state.dogCameraStreaming && !state.scanning;
+        els.recordToggle.disabled = disabled;
+        els.recordToggle.title = disabled ? "Waiting for live Go2 camera frames" : "";
+      }
+
+      function renderStatus() {
+        if (state.visionSource === "dog") {
+          if (state.dogCameraStreaming) {
+            setStatusPill("dog live", "connected");
+          } else if (state.dogConnectionActive) {
+            setStatusPill("dog waiting", "connecting");
+          } else {
+            setStatusPill("dog offline", "dog offline");
+          }
+          updateRecordAvailability();
+          return;
+        }
+        setStatusPill(state.transportStatus, state.transportStatus);
+        updateRecordAvailability();
       }
 
       function log(message) {
@@ -1967,7 +2101,7 @@
         state.stream = stream;
         els.video.srcObject = state.stream;
         await els.video.play();
-        setRecord3dMode(false);
+        setVisionSource("browser");
         setStatus("camera");
         log("camera ready");
       }
@@ -2021,7 +2155,25 @@
         if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
           return;
         }
-        if (state.useRecord3d) {
+        if (state.visionSource === "dog") {
+          if (!state.dogCameraStreaming || state.lastDogFrames === 0) {
+            log("No live Go2 camera frame received yet");
+            return;
+          }
+          setScanPending(true);
+          state.frameId += 1;
+          state.ws.send(
+            JSON.stringify({
+              type: "dog_frame",
+              frame_id: state.frameId,
+              interaction_phase: state.workflow,
+              ts: Date.now(),
+            }),
+          );
+          return;
+        }
+
+        if (state.visionSource === "record3d") {
           if (state.lastRecord3dFrames === 0) {
             log("No Record3D frame received yet");
             return;
@@ -2058,11 +2210,14 @@
 
       async function handleMessage(message) {
         if (message.type === "hello") {
-          log(`model ${message.model}`);
+          log(`vision ${message.vision_provider || "openai"} ${message.model}`);
           return;
         }
         if (message.type === "error") {
           setScanPending(false);
+          if (message.dog) {
+            applyDogStatus(message.dog);
+          }
           log(message.message);
           return;
         }
@@ -2099,6 +2254,10 @@
           els.line.textContent = message.line;
         }
         log(`${message.state}/${message.action || "none"}: ${message.notes || ""}`);
+        if (message.dog) {
+          applyDogStatus(message.dog);
+          log(`dog camera ${message.dog.frames_received || 0}, lidar ${message.dog.lidar_frames_received || 0}`);
+        }
         if (message.record3d) {
           log(`record3d frames ${message.record3d.frames_received || 0}`);
         }
@@ -2132,7 +2291,7 @@
         await robotAction({ action: "wave" });
         log("wave and Coke-for-photo offer");
         await speakOnce(message.line, "spoke joke and offer");
-        setWorkflow("confirm_bottle", "Waiting for the person holding the Coke bottle in frame.");
+        setWorkflow("confirm_bottle", "Waiting for the person holding the Coke can up in frame.");
       }
 
       async function completePhoto(message) {
@@ -2143,15 +2302,19 @@
         state.lastPhotoAt = now;
         state.photoInProgress = true;
         try {
-          const line = message.line || "Perfect. Hold the Coke up. Cheese.";
+          const line = message.line || "Hold the Coke can up front and center. Cheers.";
           els.line.textContent = line;
           await speakOnce(line, "spoke cheese cue");
           await snapPhoto();
+          await playPrintSound();
+          const doneLine = "Photo is done. You can pick it up from my head.";
+          els.line.textContent = doneLine;
+          await speakOnce(doneLine, "spoke photo pickup cue");
           dance();
           await robotAction({ action: "dance" });
           log("photo saved; dance triggered");
           await sleep(2500);
-          setWorkflow("find_guest", "Photo saved. Looking for the next relaxed beachgoer.");
+          setWorkflow("find_guest", "Photo saved. Looking for the next good Coke/photo target.");
         } finally {
           state.photoInProgress = false;
         }
@@ -2193,6 +2356,79 @@
         await els.audio.play();
       }
 
+      function getAudioContext() {
+        const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextCtor) {
+          return null;
+        }
+        if (!state.audioContext) {
+          state.audioContext = new AudioContextCtor();
+        }
+        return state.audioContext;
+      }
+
+      async function playPrintSound() {
+        const context = getAudioContext();
+        if (!context) {
+          return;
+        }
+        if (context.state === "suspended") {
+          await context.resume();
+        }
+
+        const start = context.currentTime + 0.03;
+        const master = context.createGain();
+        master.gain.setValueAtTime(0.0001, start);
+        master.gain.exponentialRampToValueAtTime(0.32, start + 0.015);
+        master.gain.exponentialRampToValueAtTime(0.0001, start + 1.15);
+        master.connect(context.destination);
+
+        const click = context.createOscillator();
+        const clickGain = context.createGain();
+        click.type = "square";
+        click.frequency.setValueAtTime(920, start);
+        click.frequency.exponentialRampToValueAtTime(190, start + 0.08);
+        clickGain.gain.setValueAtTime(0.45, start);
+        clickGain.gain.exponentialRampToValueAtTime(0.0001, start + 0.11);
+        click.connect(clickGain).connect(master);
+        click.start(start);
+        click.stop(start + 0.12);
+
+        for (let index = 0; index < 8; index += 1) {
+          const tickStart = start + 0.18 + index * 0.085;
+          const tick = context.createOscillator();
+          const tickGain = context.createGain();
+          tick.type = "triangle";
+          tick.frequency.setValueAtTime(index % 2 ? 105 : 130, tickStart);
+          tickGain.gain.setValueAtTime(0.16, tickStart);
+          tickGain.gain.exponentialRampToValueAtTime(0.0001, tickStart + 0.055);
+          tick.connect(tickGain).connect(master);
+          tick.start(tickStart);
+          tick.stop(tickStart + 0.06);
+        }
+
+        const noiseBuffer = context.createBuffer(1, context.sampleRate * 0.72, context.sampleRate);
+        const data = noiseBuffer.getChannelData(0);
+        for (let index = 0; index < data.length; index += 1) {
+          data[index] = (Math.random() * 2 - 1) * (1 - index / data.length);
+        }
+        const noise = context.createBufferSource();
+        const noiseFilter = context.createBiquadFilter();
+        const noiseGain = context.createGain();
+        noise.buffer = noiseBuffer;
+        noiseFilter.type = "bandpass";
+        noiseFilter.frequency.setValueAtTime(620, start + 0.16);
+        noiseFilter.Q.setValueAtTime(0.8, start + 0.16);
+        noiseGain.gain.setValueAtTime(0.07, start + 0.16);
+        noiseGain.gain.exponentialRampToValueAtTime(0.0001, start + 1.05);
+        noise.connect(noiseFilter).connect(noiseGain).connect(master);
+        noise.start(start + 0.16);
+        noise.stop(start + 1.08);
+
+        log("camera print sound");
+        await sleep(1180);
+      }
+
       async function savePhoto(payload) {
         const response = await fetch("/photos/save", {
           method: "POST",
@@ -2206,7 +2442,16 @@
       }
 
       async function snapPhoto() {
-        if (state.useRecord3d) {
+        if (state.visionSource === "dog") {
+          const saved = await savePhoto({ source: "dog" });
+          const url = `${saved.url}?ts=${Date.now()}`;
+          els.photoPreview.src = url;
+          els.downloadLink.href = url;
+          els.downloadLink.hidden = false;
+          log(`dog photo saved ${saved.path || ""}`);
+          return;
+        }
+        if (state.visionSource === "record3d") {
           const saved = await savePhoto({ source: "record3d" });
           const url = `${saved.url}?ts=${Date.now()}`;
           els.photoPreview.src = url;
@@ -2268,12 +2513,124 @@
         }
       }
 
+      function sourceFromHealth(health) {
+        if (health.vision_source) {
+          return health.vision_source;
+        }
+        if (health.dog_enabled || health.robot_enabled) {
+          return "dog";
+        }
+        if (health.record3d_enabled) {
+          return "record3d";
+        }
+        return "browser";
+      }
+
+      async function loadHealth() {
+        const response = await fetch("/health");
+        if (!response.ok) {
+          throw new Error(`health ${response.status}`);
+        }
+        return response.json();
+      }
+
+      async function selectVisionSource() {
+        const health = await loadHealth();
+        const source = sourceFromHealth(health);
+        setVisionSource(source);
+        return source;
+      }
+
+      function refreshDogPreview() {
+        if (state.visionSource !== "dog") {
+          return;
+        }
+        state.dogCameraLive = true;
+        els.dogPreview.src = `/dog/stream.mjpg?ts=${Date.now()}`;
+      }
+
+      function showDogPlaceholder() {
+        state.dogCameraLive = false;
+        state.dogLidarLive = false;
+        els.dogPreview.src = DOG_PLACEHOLDER_SRC;
+        els.dogLidarPreview.removeAttribute("src");
+        els.dogLidarPreview.hidden = true;
+        els.dogLidarPreview.closest(".dog-lidar-pane")?.classList.remove("has-lidar");
+      }
+
       function refreshRecord3dPreview() {
-        if (!state.useRecord3d) {
+        if (state.visionSource !== "record3d") {
           return;
         }
         els.record3dPreview.src = `/record3d/stream.mjpg?ts=${Date.now()}`;
         els.depthPreview.src = `/record3d/stream-depth.mjpg?ts=${Date.now()}`;
+      }
+
+      function setVisionSource(source) {
+        state.visionSource = source;
+        document.body.classList.toggle("dog-mode", source === "dog");
+        document.body.classList.toggle("record3d-mode", source === "record3d");
+        els.sourceLabel.textContent =
+          source === "dog" ? "Go2 WebRTC" : source === "record3d" ? "Record3D RGBD" : "Local camera";
+        renderStatus();
+
+        if (source === "dog") {
+          showDogPlaceholder();
+        } else if (source === "record3d") {
+          refreshRecord3dPreview();
+        }
+      }
+
+      function applyDogStatus(status) {
+        if (!status.enabled) {
+          els.rgbdStatus.textContent = "dog off";
+          state.dogConnectionActive = false;
+          state.dogCameraStreaming = false;
+          renderStatus();
+          return;
+        }
+
+        state.lastDogFrames = status.frames_received || 0;
+        state.lastDogLidarFrames = status.lidar_frames_received || 0;
+        state.dogConnectionActive = Boolean(status.connected);
+        state.dogCameraStreaming = Boolean(status.streaming);
+        renderStatus();
+        if (state.visionSource === "dog" && state.scanning && status.streaming && !state.dogCameraLive) {
+          refreshDogPreview();
+        } else if (state.visionSource === "dog" && !status.streaming && state.dogCameraLive) {
+          showDogPlaceholder();
+        }
+        state.dogLidarLive = Boolean(status.lidar_streaming);
+        if (state.dogLidarLive && !els.dogLidarPreview.src) {
+          els.dogLidarPreview.src = `/dog/lidar-stream.mjpg?ts=${Date.now()}`;
+        } else if (!state.dogLidarLive) {
+          els.dogLidarPreview.removeAttribute("src");
+        }
+        els.dogLidarPreview.hidden = !state.dogLidarLive;
+        els.dogLidarPreview.closest(".dog-lidar-pane")?.classList.toggle("has-lidar", state.dogLidarLive);
+        const cameraStatus = status.streaming
+          ? `cam ${state.lastDogFrames}`
+          : status.stale
+            ? "cam stale"
+            : status.waiting_for_frames
+              ? "cam waiting"
+              : status.last_error
+                ? "cam error"
+                : "cam idle";
+        const lidarStatus = status.lidar_streaming
+          ? `lidar ${state.lastDogLidarFrames}`
+          : status.lidar_stale
+            ? "lidar stale"
+            : status.waiting_for_lidar
+              ? "lidar waiting"
+              : status.lidar_last_error
+                ? "lidar error"
+                : "lidar idle";
+        els.rgbdStatus.textContent = `${cameraStatus} / ${lidarStatus}`;
+
+        if (state.scanning && !status.streaming) {
+          els.line.textContent = "Waiting for Go2 WebRTC camera frames.";
+        }
       }
 
       function applyRecord3dStatus(status) {
@@ -2303,6 +2660,15 @@
         els.rgbdStatus.textContent = status.last_error ? "rgbd error" : "rgbd idle";
       }
 
+      async function pollDogStatus() {
+        try {
+          const response = await fetch("/dog/status");
+          applyDogStatus(await response.json());
+        } catch (err) {
+          els.rgbdStatus.textContent = "dog status error";
+        }
+      }
+
       async function pollRecord3dStatus() {
         try {
           const response = await fetch("/record3d/status");
@@ -2312,26 +2678,41 @@
         }
       }
 
-      function setRecord3dMode(enabled) {
-        state.useRecord3d = enabled;
-        document.body.classList.toggle("record3d-mode", enabled);
-
-        if (enabled) {
-          refreshRecord3dPreview();
-        } else {
-          log("browser camera mode");
+      async function pollVisionStatus() {
+        if (state.visionSource === "dog") {
+          await pollDogStatus();
+        } else if (state.visionSource === "record3d") {
+          await pollRecord3dStatus();
         }
+      }
+
+      function startVisionStatusPolling() {
+        if (state.statusTimer) {
+          window.clearInterval(state.statusTimer);
+        }
+        state.statusTimer = window.setInterval(pollVisionStatus, 1500);
+      }
+
+      async function enableDog() {
+        const response = await fetch("/dog/status");
+        const status = await response.json();
+        if (!status.enabled) {
+          throw new Error("Go2 camera is not enabled on the server");
+        }
+
+        setVisionSource("dog");
+        applyDogStatus(status);
+        log(`dog enabled, camera ${status.frames_received || 0}, lidar ${status.lidar_frames_received || 0}`);
       }
 
       async function enableRecord3d() {
         const response = await fetch("/record3d/status");
         const status = await response.json();
         if (!status.enabled) {
-          log("record3d not enabled on server");
-          return;
+          throw new Error("Record3D is not enabled on the server");
         }
 
-        setRecord3dMode(true);
+        setVisionSource("record3d");
         applyRecord3dStatus(status);
         log(`record3d enabled, frames ${status.frames_received || 0}`);
       }
@@ -2345,6 +2726,35 @@
 
       function sleep(ms) {
         return new Promise((resolve) => window.setTimeout(resolve, ms));
+      }
+
+      async function ensureDogReady() {
+        let status = null;
+        for (let attempt = 0; attempt < 12; attempt += 1) {
+          const response = await fetch("/dog/status");
+          status = await response.json();
+          if (!status.enabled) {
+            throw new Error("Go2 camera is not enabled on the server");
+          }
+          applyDogStatus(status);
+          if (status.streaming) {
+            if (!status.lidar_streaming) {
+              log("Go2 LiDAR is not streaming yet; continuing with camera only");
+            }
+            return true;
+          }
+          await sleep(500);
+        }
+
+        const cameraReady = status && status.streaming;
+        const lidarReady = status && status.lidar_streaming;
+        if (!cameraReady) {
+          throw new Error("Go2 WebRTC camera is not streaming yet");
+        }
+        if (!lidarReady) {
+          log("Go2 LiDAR is not streaming yet; continuing with camera only");
+        }
+        return true;
       }
 
       async function ensureRecord3dReady() {
@@ -2381,8 +2791,18 @@
       }
 
       async function startAutomation() {
-        await enableRecord3d();
-        await ensureRecord3dReady();
+        const source = await selectVisionSource();
+        if (source === "dog") {
+          await enableDog();
+          await ensureDogReady();
+          refreshDogPreview();
+        } else if (source === "record3d") {
+          await enableRecord3d();
+          await ensureRecord3dReady();
+        } else {
+          await startCamera();
+        }
+        startVisionStatusPolling();
         await robotPreflight();
         if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
           connect();
@@ -2390,25 +2810,27 @@
         state.scanning = true;
         state.workflow = "find_guest";
         setRunningUi(true);
-        els.line.textContent = "Standing up, balancing, then looking for a relaxed beachgoer.";
-        log("auto scan started: every 10s");
+        els.line.textContent = "Standing up, balancing, then looking for a good Coke/photo target.";
+        log("auto scan started: every 1s");
         sendFrame();
         if (state.timer) {
           window.clearInterval(state.timer);
         }
-        state.timer = window.setInterval(sendFrame, 10000);
+        state.timer = window.setInterval(sendFrame, SCAN_INTERVAL_MS);
       }
 
       function stopAutomation() {
         state.scanning = false;
         state.workflow = "find_guest";
         setScanPending(false);
-        setRecord3dMode(false);
         if (state.timer) {
           window.clearInterval(state.timer);
           state.timer = null;
         }
         setRunningUi(false);
+        if (state.visionSource === "dog") {
+          showDogPlaceholder();
+        }
         log("auto scan stopped");
       }
 
@@ -2422,13 +2844,20 @@
 
       async function init() {
         try {
-          const response = await fetch("/record3d/status");
-          const status = await response.json();
-          if (status.enabled) {
+          const source = await selectVisionSource();
+          if (source === "dog") {
             connect();
-            applyRecord3dStatus(status);
-            state.statusTimer = window.setInterval(pollRecord3dStatus, 1500);
-            log(`record3d ready, frames ${status.frames_received || 0}`);
+            await pollDogStatus();
+            startVisionStatusPolling();
+            log("dog mode selected from health");
+          } else if (source === "record3d") {
+            connect();
+            await pollRecord3dStatus();
+            startVisionStatusPolling();
+            log("record3d mode selected from health");
+          } else {
+            els.rgbdStatus.textContent = "camera idle";
+            log("browser camera mode selected from health");
           }
         } catch (err) {
           log(`init ${err.message}`);

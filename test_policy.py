@@ -123,6 +123,56 @@ def test_gemini_provider_uses_openai_compatible_endpoint(monkeypatch) -> None:
     assert decision["line"]
 
 
+def test_greet_line_tells_person_to_take_coke_from_back() -> None:
+    raw = _raw_decision()
+    raw["line"] = "That laptop focus is powerful, but my tiny cooler has entered the chat."
+
+    decision = policy._normalize_decision(raw, policy.FetchPolicyConfig())
+
+    assert decision["state"] == "greet"
+    assert "Coke" in decision["line"]
+    assert "back" in decision["line"]
+    assert "instant photo" in decision["line"]
+
+
+def test_photo_coaching_line_mentions_coke_and_frame() -> None:
+    raw = _raw_decision()
+    raw["line"] = "Scoot a little left so the camera can see you."
+    raw["photo_ready"] = False
+
+    decision = policy._normalize_decision(
+        raw,
+        policy.FetchPolicyConfig(),
+        interaction_phase="confirm_bottle",
+    )
+
+    assert decision["state"] == "wait_for_bottle"
+    assert "Coke" in decision["line"]
+    assert "frame" in decision["line"]
+
+
+def test_photo_ready_line_gives_photographer_cue() -> None:
+    raw = _raw_decision()
+    raw["line"] = "Perfect."
+    raw["photo_ready"] = True
+    raw["framing"] = {
+        "person_visible": True,
+        "bottle_visible": True,
+        "well_framed": True,
+        "notes": "person and can centered",
+    }
+
+    decision = policy._normalize_decision(
+        raw,
+        policy.FetchPolicyConfig(),
+        interaction_phase="confirm_bottle",
+    )
+
+    assert decision["state"] == "photo_ready"
+    assert "Coke" in decision["line"]
+    assert "Cheers" in decision["line"]
+
+
 def test_gemini_retries_without_json_mode_if_unsupported(monkeypatch) -> None:
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.setenv("GOOGLE_API_KEY", "google-key")
