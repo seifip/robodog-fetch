@@ -100,7 +100,8 @@ configured separately with `--tts-provider`.
 ## Audio
 
 Browser speech uses `/speak` by default. With `--tts-provider gemini`, `/speak`
-uses Gemini Live TTS and requires `GEMINI_API_KEY` or `GOOGLE_API_KEY`. With
+uses Gemini 3.1 Flash TTS Preview and requires `GEMINI_API_KEY` or
+`GOOGLE_API_KEY` plus the `google-genai` Python SDK. With
 `--tts-provider openai`, `/speak` uses OpenAI TTS and requires `OPENAI_API_KEY`.
 
 OpenAI Realtime WebRTC is optional. Enable it explicitly with
@@ -123,7 +124,7 @@ python -m dimos.experimental.fetch.iphone_middleware \
   --tts-voice echo
 ```
 
-For Gemini Live TTS as the primary browser audio route:
+For Gemini TTS as the primary browser audio route:
 
 ```bash
 export GEMINI_API_KEY=<YOUR_KEY>

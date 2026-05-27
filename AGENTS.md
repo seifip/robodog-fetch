@@ -28,7 +28,7 @@ python -m dimos.experimental.fetch.iphone_middleware --host 0.0.0.0 --port 8455 
 export GEMINI_API_KEY=<KEY>
 python -m dimos.experimental.fetch.iphone_middleware --host 0.0.0.0 --port 8455 --vision-provider gemini
 
-# Use Gemini Live TTS as the primary browser audio route:
+# Use Gemini TTS as the primary browser audio route:
 export GEMINI_API_KEY=<KEY>
 python -m dimos.experimental.fetch.iphone_middleware --host 0.0.0.0 --port 8455 --tts-provider gemini --tts-voice Charon
 
@@ -81,11 +81,11 @@ Two **interaction phases** drive different prompts:
 | `policy.py` | Core state machine: `FetchPolicy.analyze_frame()` sends image+prompt to vision LLM, parses JSON response into a normalized decision dict. All state logic lives here. |
 | `iphone_middleware.py` | FastAPI server (`FetchIphoneMiddleware`): WebSocket endpoint for browser, Record3D, and Go2 frame routing; REST endpoints for Record3D/Go2 frames, robot commands, TTS, Realtime client secrets, and photo capture. |
 | `record3d_source.py` | Background thread (`Record3DSource`) that reads RGBD frames from Record3D USB, encodes to JPEG, and produces depth hints (median distances, confidence). |
-| `tts.py` | TTS provider helpers: Gemini Live TTS, voice-name mapping, and PCM-to-WAV conversion. |
+| `tts.py` | TTS provider helpers: Gemini TTS, voice-name mapping, audio extraction, and PCM-to-WAV conversion. |
 | `static/index.html` | Single-page phone UI: camera feed, Go2/Record3D previews, controls, decision display, audio routing, and photo flow. |
 | `test_policy.py` | Unit tests for `policy.py` — provider routing, JSON parsing, config validation, client caching. |
 | `test_iphone_middleware.py` | Middleware tests for Realtime setup, audio route advertisement, and Gemini `/speak`. |
-| `test_tts.py` | Unit tests for Gemini voice mapping, WAV conversion, and Live TTS response handling. |
+| `test_tts.py` | Unit tests for Gemini voice mapping, WAV conversion, and Gemini TTS response handling. |
 
 ### Data Flow
 
@@ -94,7 +94,7 @@ Two **interaction phases** drive different prompts:
 3. LLM returns raw JSON → `_extract_json_object()` parses it (tolerates markdown fences, extra surrounding text).
 4. `_normalize_decision()` maps raw fields to canonical state/action/cmd_vel.
 5. Decision dict sent back to client over WebSocket or REST response.
-6. Client may call `/robot/action` (move, wave, dance, stand) or `/speak` based on the decision. `/speak` uses Gemini Live TTS when `--tts-provider gemini` is selected; otherwise it uses OpenAI TTS. OpenAI Realtime is opt-in with `--enable-realtime` and falls back to `/speak`.
+6. Client may call `/robot/action` (move, wave, dance, stand) or `/speak` based on the decision. `/speak` uses Gemini 3.1 Flash TTS Preview when `--tts-provider gemini` is selected; otherwise it uses OpenAI TTS. OpenAI Realtime is opt-in with `--enable-realtime` and falls back to `/speak`.
 
 ## Key Gotchas
 
@@ -108,9 +108,9 @@ Two **interaction phases** drive different prompts:
   - OpenAI: `OPENAI_API_KEY`
   - Gemini: `GEMINI_API_KEY` or `GOOGLE_API_KEY` (fallback chain)
   - OpenAI TTS and Realtime: `OPENAI_API_KEY`
-  - Gemini Live TTS: `GEMINI_API_KEY` or `GOOGLE_API_KEY`
+  - Gemini TTS: `GEMINI_API_KEY` or `GOOGLE_API_KEY`, plus the `google-genai` Python SDK
 
-- **Audio routing is provider-aware.** Browser speech uses `/speak` by default. `--tts-provider gemini` makes Gemini Live TTS the primary route. `--enable-realtime` only enables OpenAI Realtime when `--tts-provider openai`; the browser learns this from the WebSocket `hello` message fields `tts_provider`, `audio_route`, and `realtime_enabled`.
+- **Audio routing is provider-aware.** Browser speech uses `/speak` by default. `--tts-provider gemini` makes Gemini 3.1 Flash TTS Preview the primary route. `--enable-realtime` only enables OpenAI Realtime when `--tts-provider openai`; the browser learns this from the WebSocket `hello` message fields `tts_provider`, `audio_route`, and `realtime_enabled`.
 
 - **`/realtime/client-secret` is local-demo unauthenticated.** It is disabled by default and only responds when OpenAI Realtime is enabled, but it still needs an access gate before shared-network or public deployment.
 

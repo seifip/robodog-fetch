@@ -230,7 +230,7 @@ def test_speak_uses_gemini_tts_without_openai_client(monkeypatch) -> None:
     gemini_tts = AsyncMock(return_value=b"RIFFwav")
 
     with (
-        patch("iphone_middleware.gemini_live_tts", new=gemini_tts),
+        patch("iphone_middleware.gemini_tts", new=gemini_tts),
         patch("iphone_middleware.OpenAI") as openai_cls,
     ):
         response = TestClient(middleware.server.app).post(

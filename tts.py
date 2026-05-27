@@ -16,13 +16,15 @@
 
 from __future__ import annotations
 
+import base64
 import os
+import re
 import struct
-from typing import Literal
+from typing import Any, Literal
 
 TtsProvider = Literal["openai", "gemini"]
 
-DEFAULT_GEMINI_TTS_MODEL = "gemini-3.1-flash-live-preview"
+DEFAULT_GEMINI_TTS_MODEL = "gemini-3.1-flash-tts-preview"
 GEMINI_TTS_SAMPLE_RATE = 24000
 
 VOICE_MAP_OPENAI_TO_GEMINI: dict[str, str] = {
@@ -84,15 +86,90 @@ def _gemini_api_key() -> tuple[str, str | None]:
     )
 
 
-async def gemini_live_tts(text: str, voice: str = "Kore") -> bytes:
+def _sample_rate_from_mime_type(mime_type: str | None) -> int:
+    if not mime_type:
+        return GEMINI_TTS_SAMPLE_RATE
+    match = re.search(r"(?:^|[;\s])rate=(\d+)", mime_type)
+    if match is None:
+        return GEMINI_TTS_SAMPLE_RATE
+    return int(match.group(1))
+
+
+def _field(value: Any, name: str) -> Any:
+    if isinstance(value, dict):
+        return value.get(name)
+    return getattr(value, name, None)
+
+
+def _inline_audio_bytes(inline_data: Any) -> bytes | None:
+    data = _field(inline_data, "data")
+    if data is None:
+        return None
+    if isinstance(data, bytes):
+        return data
+    if isinstance(data, bytearray):
+        return bytes(data)
+    if isinstance(data, memoryview):
+        return data.tobytes()
+    if isinstance(data, str):
+        try:
+            return base64.b64decode(data, validate=True)
+        except (ValueError, base64.binascii.Error) as exc:
+            raise RuntimeError("Gemini TTS returned invalid base64 audio data") from exc
+    return None
+
+
+def _extract_gemini_tts_audio(response: Any) -> tuple[bytes, str | None]:
+    chunks: list[bytes] = []
+    mime_type: str | None = None
+
+    for candidate in _field(response, "candidates") or []:
+        content = _field(candidate, "content")
+        for part in _field(content, "parts") or []:
+            inline_data = _field(part, "inline_data")
+            if inline_data is None:
+                continue
+            audio = _inline_audio_bytes(inline_data)
+            if not audio:
+                continue
+            chunks.append(audio)
+            mime_type = mime_type or _field(inline_data, "mime_type")
+
+    if not chunks:
+        for part in _field(response, "parts") or []:
+            inline_data = _field(part, "inline_data")
+            if inline_data is None:
+                continue
+            audio = _inline_audio_bytes(inline_data)
+            if not audio:
+                continue
+            chunks.append(audio)
+            mime_type = mime_type or _field(inline_data, "mime_type")
+
+    if not chunks:
+        raise RuntimeError("Gemini TTS returned no audio data")
+
+    return b"".join(chunks), mime_type
+
+
+async def gemini_tts(text: str, voice: str = "Kore") -> bytes:
+    text = text.strip()
+    if not text:
+        raise RuntimeError("Gemini TTS text must be non-empty")
+
     key_name, api_key = _gemini_api_key()
     if not api_key:
         raise RuntimeError(f"{key_name} is not set")
 
-    from google import genai
-    from google.genai import types
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError as exc:
+        raise RuntimeError(
+            "google-genai is required for Gemini TTS; install it with `pip install google-genai`"
+        ) from exc
 
-    config = types.LiveConnectConfig(
+    config = types.GenerateContentConfig(
         response_modalities=["AUDIO"],
         speech_config=types.SpeechConfig(
             voice_config=types.VoiceConfig(
@@ -104,38 +181,19 @@ async def gemini_live_tts(text: str, voice: str = "Kore") -> bytes:
     )
 
     client = genai.Client(api_key=api_key)
-    pcm_chunks: list[bytes] = []
-
-    async with client.aio.live.connect(
+    response = await client.aio.models.generate_content(
         model=DEFAULT_GEMINI_TTS_MODEL,
+        contents=(
+            "Speak exactly this Fetch robot dog line, with warm playful energy. "
+            f"Do not add words: {text}"
+        ),
         config=config,
-    ) as session:
-        await session.send_client_content(
-            turns=[types.Content(
-                role="user",
-                parts=[types.Part.from_text(text=f"Speak exactly this text, nothing else: {text}")]
-            )],
-            turn_complete=True,
-        )
-        async for response in session.receive():
-            server_content = getattr(response, "server_content", None)
-            if server_content is None:
-                continue
-            model_turn = getattr(server_content, "model_turn", None)
-            if model_turn is None:
-                continue
-            parts = getattr(model_turn, "parts", None)
-            if parts is None:
-                continue
-            for part in parts:
-                inline_data = getattr(part, "inline_data", None)
-                if inline_data is None:
-                    continue
-                data = getattr(inline_data, "data", None)
-                if data:
-                    pcm_chunks.append(data)
+    )
+    audio, mime_type = _extract_gemini_tts_audio(response)
+    if audio.startswith(b"RIFF") or mime_type in {"audio/wav", "audio/wave", "audio/x-wav"}:
+        return audio
 
-    if not pcm_chunks:
-        raise RuntimeError("Gemini Live TTS returned no audio data")
+    return pcm_to_wav(audio, sample_rate=_sample_rate_from_mime_type(mime_type))
 
-    return pcm_to_wav(b"".join(pcm_chunks))
+
+gemini_live_tts = gemini_tts
