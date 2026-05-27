@@ -19,9 +19,10 @@ import argparse
 import asyncio
 import base64
 from datetime import datetime
+import os
 from pathlib import Path
 import time
-from typing import Any
+from typing import Any, cast
 
 from dotenv import load_dotenv
 from fastapi import WebSocket, WebSocketDisconnect
@@ -30,7 +31,15 @@ from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
 from unitree_webrtc_connect.constants import RTC_TOPIC
 
-from dimos.experimental.fetch.policy import FetchPolicy, FetchPolicyConfig
+from dimos.experimental.fetch.policy import (
+    DEFAULT_GEMINI_VISION_MODEL,
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_OPENAI_VISION_MODEL,
+    DEFAULT_REQUEST_TIMEOUT_S,
+    FetchPolicy,
+    FetchPolicyConfig,
+    VisionProvider,
+)
 from dimos.experimental.fetch.record3d_source import Record3DSource
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
@@ -53,7 +62,8 @@ class FetchIphoneMiddleware:
         self,
         host: str = "0.0.0.0",
         port: int = DEFAULT_PORT,
-        model: str = "gpt-5-mini",
+        model: str | None = None,
+        vision_provider: VisionProvider = "openai",
         tts_model: str = "tts-1",
         tts_voice: str = "echo",
         record3d: bool = False,
@@ -67,14 +77,16 @@ class FetchIphoneMiddleware:
         self.tts_voice = tts_voice
         self.robot_ip = robot_ip
         self.robot_connection_method = robot_connection_method
-        self.policy = FetchPolicy(FetchPolicyConfig(model=model))
+        self.policy = FetchPolicy(
+            FetchPolicyConfig(model=model, vision_provider=vision_provider)
+        )
         self.server = FastAPIServer(
             dev_name="Fetch iPhone Middleware",
             edge_type="Bidirectional",
             host=host,
             port=port,
         )
-        self._openai_client = OpenAI()
+        self._openai_client: OpenAI | None = None
         self._record3d_source = Record3DSource(record3d_device_index) if record3d else None
         self._setup_routes()
 
@@ -93,6 +105,16 @@ class FetchIphoneMiddleware:
         if parameter is not None:
             payload["parameter"] = parameter
         return conn.publish_request(RTC_TOPIC["SPORT_MOD"], payload)
+
+    def _get_openai_client(self) -> OpenAI | None:
+        if not os.getenv("OPENAI_API_KEY"):
+            return None
+        if self._openai_client is None:
+            self._openai_client = OpenAI(
+                timeout=DEFAULT_REQUEST_TIMEOUT_S,
+                max_retries=DEFAULT_MAX_RETRIES,
+            )
+        return self._openai_client
 
     def _setup_routes(self) -> None:
         self.server.app.router.routes = [
@@ -271,7 +293,14 @@ class FetchIphoneMiddleware:
             if len(text) > 240:
                 return JSONResponse({"error": "Text is too long"}, status_code=400)
 
-            speech = self._openai_client.audio.speech.create(
+            openai_client = self._get_openai_client()
+            if openai_client is None:
+                return JSONResponse(
+                    {"error": "OPENAI_API_KEY is not set; speech requires OpenAI TTS"},
+                    status_code=503,
+                )
+
+            speech = openai_client.audio.speech.create(
                 model=self.tts_model,
                 voice=str(payload.get("voice") or self.tts_voice),
                 input=text,
@@ -294,6 +323,7 @@ class FetchIphoneMiddleware:
                     "type": "hello",
                     "service": "fetch-iphone",
                     "model": self.policy.config.model,
+                    "vision_provider": self.policy.config.vision_provider,
                 }
             )
             logger.info("Fetch iPhone client connected")
@@ -363,7 +393,21 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the Fetch iPhone middleware.")
     parser.add_argument("--host", default="0.0.0.0", help="Bind host for the HTTPS server.")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Bind port.")
-    parser.add_argument("--model", default="gpt-5-mini", help="OpenAI vision model.")
+    parser.add_argument(
+        "--model",
+        default=None,
+        help=(
+            "Vision model. Defaults to "
+            f"{DEFAULT_OPENAI_VISION_MODEL} for OpenAI and "
+            f"{DEFAULT_GEMINI_VISION_MODEL} for Gemini."
+        ),
+    )
+    parser.add_argument(
+        "--vision-provider",
+        choices=("openai", "gemini"),
+        default="openai",
+        help="Provider for image analysis.",
+    )
     parser.add_argument("--tts-model", default="tts-1", help="OpenAI TTS model.")
     parser.add_argument("--tts-voice", default="echo", help="OpenAI TTS voice.")
     parser.add_argument("--record3d", action="store_true", help="Read RGBD frames from Record3D over USB.")
@@ -375,7 +419,17 @@ def _parse_args() -> argparse.Namespace:
         help="Unitree WebRTC connection method: auto, local_ap, or local_sta.",
     )
     parser.add_argument("--no-ssl", action="store_true", help="Disable HTTPS for local debugging.")
-    return parser.parse_args()
+    args = parser.parse_args()
+    try:
+        resolved_config = FetchPolicyConfig(
+            model=args.model,
+            vision_provider=cast(VisionProvider, args.vision_provider),
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    args.model = resolved_config.model
+    args.vision_provider = resolved_config.vision_provider
+    return args
 
 
 def main() -> None:
@@ -386,6 +440,7 @@ def main() -> None:
         host=args.host,
         port=args.port,
         model=args.model,
+        vision_provider=cast(VisionProvider, args.vision_provider),
         tts_model=args.tts_model,
         tts_voice=args.tts_voice,
         record3d=args.record3d,

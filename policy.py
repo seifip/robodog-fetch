@@ -26,12 +26,98 @@ ApproachState = Literal["search", "approach", "greet", "wait_for_bottle", "photo
 InteractionPhase = Literal["find_guest", "confirm_bottle"]
 Bearing = Literal["left", "center", "right", "unknown"]
 RangeEstimate = Literal["far", "medium", "near", "inside_4m", "inside_1m", "unknown"]
+VisionProvider = Literal["openai", "gemini"]
+
+GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+DEFAULT_OPENAI_VISION_MODEL = "gpt-5-mini"
+DEFAULT_GEMINI_VISION_MODEL = "gemini-3.5-flash"
+DEFAULT_VISION_MODEL_BY_PROVIDER: dict[VisionProvider, str] = {
+    "openai": DEFAULT_OPENAI_VISION_MODEL,
+    "gemini": DEFAULT_GEMINI_VISION_MODEL,
+}
+DEFAULT_REQUEST_TIMEOUT_S = 30.0
+DEFAULT_MAX_RETRIES = 2
+
+
+def _validate_vision_provider(provider: str) -> VisionProvider:
+    if provider == "openai" or provider == "gemini":
+        return provider
+    raise ValueError(f"Unsupported vision provider: {provider!r}")
+
+
+def default_model_for_provider(provider: VisionProvider) -> str:
+    return DEFAULT_VISION_MODEL_BY_PROVIDER[_validate_vision_provider(provider)]
+
+
+def _known_provider_for_model(model: str) -> VisionProvider | None:
+    normalized = model.lower().strip()
+    if normalized.startswith(("gemini-", "models/gemini-")):
+        return "gemini"
+    if normalized.startswith("gpt-") or re.match(r"^o\d(?:-|$)", normalized):
+        return "openai"
+    return None
+
+
+def _validate_model_for_provider(provider: VisionProvider, model: str) -> None:
+    model_provider = _known_provider_for_model(model)
+    if model_provider is not None and model_provider != provider:
+        raise ValueError(
+            f"Model {model!r} appears to be a {model_provider} model, "
+            f"but vision_provider is {provider!r}"
+        )
 
 
 @dataclass(frozen=True)
 class FetchPolicyConfig:
-    model: str = "gpt-5-mini"
+    model: str | None = None
+    vision_provider: VisionProvider = "openai"
     max_line_chars: int = 120
+    request_timeout_s: float = DEFAULT_REQUEST_TIMEOUT_S
+    max_retries: int = DEFAULT_MAX_RETRIES
+
+    def __post_init__(self) -> None:
+        provider = _validate_vision_provider(self.vision_provider)
+        model = (
+            default_model_for_provider(provider)
+            if self.model is None
+            else self.model
+        )
+        if not isinstance(model, str):
+            raise ValueError("Vision model must be a string")
+        model = model.strip()
+        if not model:
+            raise ValueError("Vision model must be a non-empty string")
+        _validate_model_for_provider(provider, model)
+        if (
+            not isinstance(self.max_line_chars, int)
+            or isinstance(self.max_line_chars, bool)
+            or self.max_line_chars < 1
+        ):
+            raise ValueError("max_line_chars must be positive")
+        if (
+            not isinstance(self.request_timeout_s, (int, float))
+            or isinstance(self.request_timeout_s, bool)
+            or self.request_timeout_s <= 0
+        ):
+            raise ValueError("request_timeout_s must be positive")
+        if (
+            not isinstance(self.max_retries, int)
+            or isinstance(self.max_retries, bool)
+            or self.max_retries < 0
+        ):
+            raise ValueError("max_retries cannot be negative")
+
+        object.__setattr__(self, "vision_provider", provider)
+        object.__setattr__(self, "model", model)
+
+
+@dataclass(frozen=True)
+class _ClientCacheKey:
+    api_key: str
+    provider: VisionProvider
+    model: str
+    request_timeout_s: float
+    max_retries: int
 
 
 def _default_decision(reason: str) -> dict[str, Any]:
@@ -82,15 +168,42 @@ def _extract_json_object(text: str) -> dict[str, Any]:
 
     try:
         parsed = json.loads(stripped)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", stripped, flags=re.DOTALL)
-        if not match:
-            raise
-        parsed = json.loads(match.group(0))
+    except json.JSONDecodeError as original_exc:
+        decoder = json.JSONDecoder()
+        parsed = None
+        for index, char in enumerate(stripped):
+            if char != "{":
+                continue
+            try:
+                candidate, _ = decoder.raw_decode(stripped[index:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict):
+                parsed = candidate
+                break
+        if parsed is None:
+            raise original_exc
 
     if not isinstance(parsed, dict):
-        raise ValueError("OpenAI response was not a JSON object")
+        raise ValueError("Vision model response was not a JSON object")
     return parsed
+
+
+def _api_key_for_provider(provider: VisionProvider) -> tuple[str, str | None]:
+    provider = _validate_vision_provider(provider)
+    if provider == "openai":
+        return "OPENAI_API_KEY", os.getenv("OPENAI_API_KEY")
+    if provider == "gemini":
+        return (
+            "GEMINI_API_KEY or GOOGLE_API_KEY",
+            os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"),
+        )
+    raise ValueError(f"Unsupported vision provider: {provider!r}")
+
+
+def _uses_unsupported_response_format(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "response_format" in message or "json_object" in message
 
 
 def _as_bearing(value: Any) -> Bearing:
@@ -167,7 +280,11 @@ def _normalize_decision(
     if state not in {"greet", "photo_ready", "wait_for_bottle"}:
         line = ""
 
-    cmd = _cmd_for_target(bearing, range_estimate) if state == "approach" else _default_decision("")["simulated_cmd_vel"]
+    cmd = (
+        _cmd_for_target(bearing, range_estimate)
+        if state == "approach"
+        else _default_decision("")["simulated_cmd_vel"]
+    )
     if state in {"greet", "wait_for_bottle", "photo_ready"}:
         cmd = {"linear_x": 0.0, "angular_z": 0.0, "duration_s": 0.0}
 
@@ -222,7 +339,46 @@ class FetchPolicy:
 
     def __init__(self, config: FetchPolicyConfig | None = None) -> None:
         self.config = config or FetchPolicyConfig()
-        self._client = OpenAI()
+        self._client: OpenAI | None = None
+        self._client_cache_key: _ClientCacheKey | None = None
+
+    def _get_client(self, api_key: str) -> OpenAI:
+        cache_key = _ClientCacheKey(
+            api_key=api_key,
+            provider=self.config.vision_provider,
+            model=self.config.model,
+            request_timeout_s=self.config.request_timeout_s,
+            max_retries=self.config.max_retries,
+        )
+        if self._client is not None and self._client_cache_key == cache_key:
+            return self._client
+
+        client_kwargs: dict[str, Any] = {
+            "api_key": api_key,
+            "timeout": self.config.request_timeout_s,
+            "max_retries": self.config.max_retries,
+        }
+        if self.config.vision_provider == "gemini":
+            client_kwargs["base_url"] = GEMINI_OPENAI_BASE_URL
+
+        self._client = OpenAI(**client_kwargs)
+        self._client_cache_key = cache_key
+        return self._client
+
+    def _create_completion(
+        self,
+        client: OpenAI,
+        messages: list[dict[str, Any]],
+        *,
+        use_json_response_format: bool,
+    ) -> Any:
+        kwargs: dict[str, Any] = {
+            "model": self.config.model,
+            "messages": messages,
+        }
+        if use_json_response_format:
+            kwargs["response_format"] = {"type": "json_object"}
+        return client.chat.completions.create(**kwargs)
 
     def analyze_frame(
         self,
@@ -230,8 +386,9 @@ class FetchPolicy:
         depth_hint: dict[str, Any] | None = None,
         interaction_phase: InteractionPhase = "find_guest",
     ) -> dict[str, Any]:
-        if not os.getenv("OPENAI_API_KEY"):
-            return _default_decision("OPENAI_API_KEY is not set")
+        api_key_name, api_key = _api_key_for_provider(self.config.vision_provider)
+        if not api_key:
+            return _default_decision(f"{api_key_name} is not set")
 
         if not image_data_url.startswith("data:image/"):
             return _default_decision("Expected an image data URL")
@@ -316,19 +473,34 @@ Range rule:
 {depth_note}
 """.strip()
 
-        response = self._client.chat.completions.create(
-            model=self.config.model,
-            response_format={"type": "json_object"},
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": image_data_url}},
-                        {"type": "text", "text": prompt},
-                    ],
-                }
-            ],
-        )
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": image_data_url}},
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ]
+
+        client = self._get_client(api_key)
+        try:
+            response = self._create_completion(
+                client,
+                messages,
+                use_json_response_format=True,
+            )
+        except Exception as exc:
+            if (
+                self.config.vision_provider != "gemini"
+                or not _uses_unsupported_response_format(exc)
+            ):
+                raise
+            response = self._create_completion(
+                client,
+                messages,
+                use_json_response_format=False,
+            )
         content = response.choices[0].message.content or "{}"
         parsed = _extract_json_object(content)
         return _normalize_decision(parsed, self.config, interaction_phase)

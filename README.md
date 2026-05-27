@@ -75,8 +75,25 @@ The adapter exposes:
 - `POST /robot/action`
 
 Record3D frames are analyzed with the RGB image plus a `depth_hint` containing
-center-depth and near-object summaries in meters. The default vision model is
-`gpt-5-mini`.
+center-depth and near-object summaries in meters. The default OpenAI vision model
+is `gpt-5-mini`.
+
+## Gemini Vision
+
+The fetch policy can use Gemini for image analysis through Gemini's
+OpenAI-compatible API, without LangChain:
+
+```bash
+export GEMINI_API_KEY=<YOUR_KEY>
+python -m dimos.experimental.fetch.iphone_middleware \
+  --host 0.0.0.0 \
+  --port 8455 \
+  --vision-provider gemini
+```
+
+Gemini defaults to `gemini-3.5-flash`; pass `--model` only to override it.
+`GOOGLE_API_KEY` is also accepted as a fallback for Gemini. The `/speak` endpoint
+still uses OpenAI TTS, so set `OPENAI_API_KEY` only if you want browser audio.
 
 ## WebSocket Frame
 
