@@ -44,6 +44,18 @@ from dimos.experimental.fetch.policy import (
     VisionProvider,
 )
 from dimos.experimental.fetch.record3d_source import Record3DSource
+try:
+    from dimos.experimental.fetch.tts import (
+        TtsProvider,
+        gemini_live_tts,
+        map_voice,
+    )
+except ModuleNotFoundError:
+    from tts import (  # type: ignore[no-redef]
+        TtsProvider,
+        gemini_live_tts,
+        map_voice,
+    )
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.Image import Image
@@ -465,6 +477,72 @@ class Go2Source:
             except Exception:
                 logger.debug("Go2 connection stop failed", exc_info=True)
 
+DEFAULT_REALTIME_MODEL = "gpt-realtime-2"
+DEFAULT_REALTIME_REASONING_EFFORT = "low"
+REALTIME_REASONING_EFFORTS = ("minimal", "low", "medium", "high", "xhigh")
+TTS_PROVIDERS = ("openai", "gemini")
+
+
+def _validate_tts_provider(value: str) -> TtsProvider:
+    if value not in TTS_PROVIDERS:
+        raise ValueError(f"TTS provider must be one of {', '.join(TTS_PROVIDERS)}")
+    return cast(TtsProvider, value)
+
+
+def _validate_realtime_reasoning_effort(value: str) -> str:
+    if value not in REALTIME_REASONING_EFFORTS:
+        raise ValueError(
+            "Realtime reasoning effort must be one of "
+            f"{', '.join(REALTIME_REASONING_EFFORTS)}"
+        )
+    return value
+
+
+def _realtime_instructions() -> str:
+    return """
+You are the voice of Fetch, a small robot dog beach prototype.
+Speak only the exact Fetch dog line provided in the current request.
+Do not add extra offers, explanations, narration, greetings, labels, or sound effects.
+Keep delivery short, friendly, and upbeat.
+Do not identify people or mention sensitive traits.
+If the provided line is empty or unclear, stay silent.
+""".strip()
+
+
+def _build_realtime_session_config(
+    *,
+    model: str,
+    voice: str,
+    reasoning_effort: str,
+) -> dict[str, Any]:
+    return {
+        "type": "realtime",
+        "model": model,
+        "output_modalities": ["audio"],
+        "instructions": _realtime_instructions(),
+        "audio": {
+            "output": {
+                "voice": voice,
+            }
+        },
+        "reasoning": {
+            "effort": _validate_realtime_reasoning_effort(reasoning_effort),
+        },
+    }
+
+
+def _jsonable_openai_response(response: Any) -> dict[str, Any]:
+    if hasattr(response, "model_dump"):
+        dumped = response.model_dump(mode="json")
+        return dumped if isinstance(dumped, dict) else {"response": dumped}
+    if isinstance(response, dict):
+        return response
+    return {
+        key: value
+        for key, value in vars(response).items()
+        if not key.startswith("_")
+    }
+
 
 class FetchIphoneMiddleware:
     """HTTPS phone-camera middleware for testing the Fetch behavior."""
@@ -475,8 +553,12 @@ class FetchIphoneMiddleware:
         port: int = DEFAULT_PORT,
         model: str | None = None,
         vision_provider: VisionProvider = "openai",
+        tts_provider: TtsProvider = "openai",
         tts_model: str = "tts-1",
         tts_voice: str = "echo",
+        enable_realtime: bool = False,
+        realtime_model: str = DEFAULT_REALTIME_MODEL,
+        realtime_reasoning_effort: str = DEFAULT_REALTIME_REASONING_EFFORT,
         record3d: bool = False,
         record3d_device_index: int = 0,
         robot_ip: str | None = None,
@@ -484,8 +566,16 @@ class FetchIphoneMiddleware:
     ) -> None:
         self.host = host
         self.port = port
+        self.tts_provider = _validate_tts_provider(tts_provider)
         self.tts_model = tts_model
         self.tts_voice = tts_voice
+        self.realtime_enabled = bool(enable_realtime and self.tts_provider == "openai")
+        self.realtime_model = realtime_model.strip()
+        if not self.realtime_model:
+            raise ValueError("Realtime model must be a non-empty string")
+        self.realtime_reasoning_effort = _validate_realtime_reasoning_effort(
+            realtime_reasoning_effort
+        )
         self.robot_ip = robot_ip
         self.robot_connection_method = robot_connection_method
         self.policy = FetchPolicy(
@@ -501,6 +591,9 @@ class FetchIphoneMiddleware:
         self._record3d_source = Record3DSource(record3d_device_index) if record3d else None
         self._go2_source = Go2Source(robot_ip, robot_connection_method) if robot_ip else None
         self._setup_routes()
+
+    def _audio_route(self) -> str:
+        return "realtime_then_speak" if self.realtime_enabled else "speak"
 
     def _get_openai_client(self) -> OpenAI | None:
         if not os.getenv("OPENAI_API_KEY"):
@@ -539,6 +632,9 @@ class FetchIphoneMiddleware:
                 "dog_enabled": dog_enabled,
                 "robot_enabled": dog_enabled,
                 "record3d_enabled": record3d_enabled,
+                "tts_provider": self.tts_provider,
+                "audio_route": self._audio_route(),
+                "realtime_enabled": self.realtime_enabled,
             }
 
         @self.server.app.post("/robot/preflight")
@@ -775,6 +871,21 @@ class FetchIphoneMiddleware:
             if len(text) > 240:
                 return JSONResponse({"error": "Text is too long"}, status_code=400)
 
+            voice = str(payload.get("voice") or self.tts_voice)
+
+            if self.tts_provider == "gemini":
+                try:
+                    wav_bytes = await gemini_live_tts(
+                        text, voice=map_voice(voice, "gemini"),
+                    )
+                except Exception as exc:
+                    logger.exception("Gemini Live TTS failed")
+                    return JSONResponse(
+                        {"error": f"Gemini TTS error: {exc}"},
+                        status_code=503,
+                    )
+                return Response(content=wav_bytes, media_type="audio/wav")
+
             openai_client = self._get_openai_client()
             if openai_client is None:
                 return JSONResponse(
@@ -784,11 +895,49 @@ class FetchIphoneMiddleware:
 
             speech = openai_client.audio.speech.create(
                 model=self.tts_model,
-                voice=str(payload.get("voice") or self.tts_voice),
+                voice=voice,
                 input=text,
                 response_format="mp3",
             )
             return Response(content=speech.content, media_type="audio/mpeg")
+
+        @self.server.app.post("/realtime/client-secret")
+        async def realtime_client_secret(payload: dict[str, Any] | None = None) -> Any:
+            if not self.realtime_enabled:
+                return JSONResponse(
+                    {
+                        "error": (
+                            "OpenAI Realtime is disabled; start with "
+                            "--enable-realtime and --tts-provider openai"
+                        )
+                    },
+                    status_code=404,
+                )
+
+            openai_client = self._get_openai_client()
+            if openai_client is None:
+                return JSONResponse(
+                    {"error": "OPENAI_API_KEY is not set; realtime speech requires OpenAI"},
+                    status_code=503,
+                )
+
+            voice = str((payload or {}).get("voice") or self.tts_voice).strip()
+            if not voice:
+                return JSONResponse({"error": "Missing voice"}, status_code=400)
+
+            session_config = _build_realtime_session_config(
+                model=self.realtime_model,
+                voice=voice,
+                reasoning_effort=self.realtime_reasoning_effort,
+            )
+            client_secret = await asyncio.to_thread(
+                openai_client.realtime.client_secrets.create,
+                session=session_config,
+            )
+            response_payload = _jsonable_openai_response(client_secret)
+            response_payload.setdefault("model", self.realtime_model)
+            response_payload.setdefault("voice", voice)
+            return response_payload
 
         if STATIC_DIR.is_dir():
             self.server.app.mount(
@@ -806,6 +955,9 @@ class FetchIphoneMiddleware:
                     "service": "fetch-iphone",
                     "model": self.policy.config.model,
                     "vision_provider": self.policy.config.vision_provider,
+                    "tts_provider": self.tts_provider,
+                    "audio_route": self._audio_route(),
+                    "realtime_enabled": self.realtime_enabled,
                 }
             )
             logger.info("Fetch iPhone client connected")
@@ -926,8 +1078,30 @@ def _parse_args() -> argparse.Namespace:
         default="openai",
         help="Provider for image analysis.",
     )
+    parser.add_argument(
+        "--tts-provider",
+        choices=("openai", "gemini"),
+        default="openai",
+        help="TTS provider. Gemini uses Live API for streaming voice.",
+    )
     parser.add_argument("--tts-model", default="tts-1", help="OpenAI TTS model.")
-    parser.add_argument("--tts-voice", default="echo", help="OpenAI TTS voice.")
+    parser.add_argument("--tts-voice", default="echo", help="TTS voice name (OpenAI or Gemini prebuilt).")
+    parser.add_argument(
+        "--enable-realtime",
+        action="store_true",
+        help="Try OpenAI Realtime WebRTC before /speak when using --tts-provider openai.",
+    )
+    parser.add_argument(
+        "--realtime-model",
+        default=DEFAULT_REALTIME_MODEL,
+        help="OpenAI Realtime model for optional browser voice playback.",
+    )
+    parser.add_argument(
+        "--realtime-reasoning-effort",
+        choices=REALTIME_REASONING_EFFORTS,
+        default=DEFAULT_REALTIME_REASONING_EFFORT,
+        help="Reasoning effort for optional Realtime voice playback.",
+    )
     parser.add_argument("--record3d", action="store_true", help="Read RGBD frames from Record3D over USB.")
     parser.add_argument("--record3d-device-index", type=int, default=0, help="Record3D device index.")
     parser.add_argument("--robot-ip", default=None, help="Optional live Unitree Go2 IP for Fetch actions.")
@@ -959,15 +1133,22 @@ def main() -> None:
         port=args.port,
         model=args.model,
         vision_provider=cast(VisionProvider, args.vision_provider),
+        tts_provider=cast(TtsProvider, args.tts_provider),
         tts_model=args.tts_model,
         tts_voice=args.tts_voice,
+        enable_realtime=args.enable_realtime,
+        realtime_model=args.realtime_model,
+        realtime_reasoning_effort=args.realtime_reasoning_effort,
         record3d=args.record3d,
         record3d_device_index=args.record3d_device_index,
         robot_ip=args.robot_ip,
         robot_connection_method=args.robot_connection_method,
     )
     scheme = "http" if args.no_ssl else "https"
-    logger.info(f"Fetch iPhone middleware running at {scheme}://{args.host}:{args.port}/fetch")
+    logger.info(
+        f"Fetch iPhone middleware running at {scheme}://{args.host}:{args.port}/fetch"
+        f" (vision={args.vision_provider}, tts={args.tts_provider})"
+    )
     middleware.run(ssl=not args.no_ssl)
 
 

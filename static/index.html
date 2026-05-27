@@ -2025,7 +2025,18 @@
         dogLidarLive: false,
         lastRecord3dFrames: 0,
         audioContext: null,
+        realtimePc: null,
+        realtimeDataChannel: null,
+        realtimeSessionPromise: null,
+        realtimePending: null,
+        realtimeDisabled: false,
+        ttsProvider: "openai",
+        audioRoute: "speak",
+        realtimeAvailable: false,
       };
+
+      const REALTIME_CLIENT_SECRET_TIMEOUT_MS = 5000;
+      const REALTIME_SDP_TIMEOUT_MS = 8000;
 
       function setStatus(text) {
         state.transportStatus = text;
@@ -2127,6 +2138,7 @@
           state.scanning = false;
           setScanPending(false);
           setRunningUi(false);
+          closeRealtimeVoiceSession();
           log("socket closed");
         };
         state.ws.onerror = () => {
@@ -2210,7 +2222,13 @@
 
       async function handleMessage(message) {
         if (message.type === "hello") {
-          log(`vision ${message.vision_provider || "openai"} ${message.model}`);
+          state.ttsProvider = message.tts_provider || "openai";
+          state.audioRoute = message.audio_route || "speak";
+          state.realtimeAvailable = Boolean(message.realtime_enabled);
+          if (state.audioRoute !== "realtime_then_speak") {
+            closeRealtimeVoiceSession();
+          }
+          log(`vision ${message.vision_provider || "openai"} ${message.model}; audio ${state.audioRoute}`);
           return;
         }
         if (message.type === "error") {
@@ -2337,10 +2355,300 @@
         }
       }
 
+      function getRealtimeSecretValue(payload) {
+        if (!payload || typeof payload !== "object") {
+          return "";
+        }
+        if (payload.client_secret && typeof payload.client_secret === "object") {
+          return payload.client_secret.value || "";
+        }
+        return payload.value || payload.client_secret || "";
+      }
+
+      async function fetchWithTimeout(
+        url,
+        options = {},
+        timeoutMs = 8000,
+        timeoutMessage = "request timeout",
+        readResponse = null,
+      ) {
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const response = await fetch(url, { ...options, signal: controller.signal });
+          const body = readResponse ? await readResponse(response) : null;
+          return { response, body };
+        } catch (err) {
+          if (err && err.name === "AbortError") {
+            throw new Error(timeoutMessage);
+          }
+          throw err;
+        } finally {
+          window.clearTimeout(timeout);
+        }
+      }
+
+      function waitForRealtimeDataChannel(channel, timeoutMs = 7000) {
+        if (channel.readyState === "open") {
+          return Promise.resolve();
+        }
+        return new Promise((resolve, reject) => {
+          const timeout = window.setTimeout(() => {
+            cleanup();
+            reject(new Error("data channel timeout"));
+          }, timeoutMs);
+          function cleanup() {
+            window.clearTimeout(timeout);
+            channel.removeEventListener("open", handleOpen);
+            channel.removeEventListener("error", handleError);
+          }
+          function handleOpen() {
+            cleanup();
+            resolve();
+          }
+          function handleError() {
+            cleanup();
+            reject(new Error("data channel error"));
+          }
+          channel.addEventListener("open", handleOpen);
+          channel.addEventListener("error", handleError);
+        });
+      }
+
+      function settleRealtimePending(error) {
+        const pending = state.realtimePending;
+        if (!pending) {
+          return;
+        }
+        state.realtimePending = null;
+        window.clearTimeout(pending.timeout);
+        if (error) {
+          pending.reject(error);
+          return;
+        }
+        pending.resolve();
+      }
+
+      function handleRealtimeEvent(event) {
+        let payload;
+        try {
+          payload = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+
+        if (payload.type === "error") {
+          const message = payload.error?.message || "realtime error";
+          settleRealtimePending(new Error(message));
+          return;
+        }
+
+        if (payload.type === "response.done") {
+          if (payload.response?.status === "failed") {
+            settleRealtimePending(new Error("response failed"));
+            return;
+          }
+          settleRealtimePending();
+          return;
+        }
+
+        if (payload.type === "response.output_audio.done") {
+          settleRealtimePending();
+        }
+      }
+
+      function closeRealtimeVoiceSession() {
+        settleRealtimePending(new Error("realtime session closed"));
+        if (state.realtimeDataChannel) {
+          try {
+            state.realtimeDataChannel.close();
+          } catch {}
+        }
+        if (state.realtimePc) {
+          try {
+            state.realtimePc.close();
+          } catch {}
+        }
+        state.realtimePc = null;
+        state.realtimeDataChannel = null;
+        state.realtimeSessionPromise = null;
+      }
+
+      async function ensureRealtimeVoiceSession() {
+        if (state.realtimeDisabled) {
+          throw new Error("disabled");
+        }
+        if (state.realtimeDataChannel?.readyState === "open" && state.realtimePc) {
+          return {
+            pc: state.realtimePc,
+            channel: state.realtimeDataChannel,
+          };
+        }
+        if (state.realtimeSessionPromise) {
+          return state.realtimeSessionPromise;
+        }
+        if (!window.RTCPeerConnection) {
+          state.realtimeDisabled = true;
+          throw new Error("WebRTC unsupported");
+        }
+
+        state.realtimeSessionPromise = (async () => {
+          const { response: tokenResponse, body: tokenPayload } = await fetchWithTimeout(
+            "/realtime/client-secret",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({}),
+            },
+            REALTIME_CLIENT_SECRET_TIMEOUT_MS,
+            "session timeout",
+            (response) => (response.ok ? response.json() : null),
+          );
+          if (!tokenResponse.ok) {
+            state.realtimeDisabled = true;
+            throw new Error(`session ${tokenResponse.status}`);
+          }
+
+          const clientSecret = getRealtimeSecretValue(tokenPayload);
+          if (!clientSecret) {
+            state.realtimeDisabled = true;
+            throw new Error("missing client secret");
+          }
+
+          const pc = new RTCPeerConnection();
+          const channel = pc.createDataChannel("oai-events");
+          pc.addTransceiver("audio", { direction: "recvonly" });
+          pc.ontrack = (trackEvent) => {
+            const [stream] = trackEvent.streams;
+            if (!stream) {
+              return;
+            }
+            els.audio.removeAttribute("src");
+            els.audio.srcObject = stream;
+            els.audio.play().catch((err) => log(`realtime audio ${err.message}`));
+          };
+          channel.addEventListener("message", handleRealtimeEvent);
+          channel.addEventListener("close", () => {
+            if (state.realtimeDataChannel === channel) {
+              state.realtimeDataChannel = null;
+            }
+          });
+          state.realtimePc = pc;
+          state.realtimeDataChannel = channel;
+
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          const { response: sdpResponse, body: answerSdp } = await fetchWithTimeout(
+            "https://api.openai.com/v1/realtime/calls",
+            {
+              method: "POST",
+              body: offer.sdp,
+              headers: {
+                Authorization: `Bearer ${clientSecret}`,
+                "Content-Type": "application/sdp",
+              },
+            },
+            REALTIME_SDP_TIMEOUT_MS,
+            "calls timeout",
+            (response) => (response.ok ? response.text() : ""),
+          );
+          if (!sdpResponse.ok) {
+            throw new Error(`calls ${sdpResponse.status}`);
+          }
+          await pc.setRemoteDescription({
+            type: "answer",
+            sdp: answerSdp,
+          });
+          await waitForRealtimeDataChannel(channel);
+
+          log(`realtime voice ${tokenPayload.model || "connected"}`);
+          return { pc, channel };
+        })();
+
+        try {
+          return await state.realtimeSessionPromise;
+        } catch (err) {
+          state.realtimeDisabled = true;
+          closeRealtimeVoiceSession();
+          throw err;
+        }
+      }
+
+      async function speakRealtime(text) {
+        const line = String(text || "").trim();
+        if (!line) {
+          return;
+        }
+        const { channel } = await ensureRealtimeVoiceSession();
+        if (channel.readyState !== "open") {
+          throw new Error("data channel closed");
+        }
+
+        const event = JSON.stringify({
+          type: "response.create",
+          response: {
+            conversation: "none",
+            input: [
+              {
+                type: "message",
+                role: "user",
+                content: [
+                  {
+                    type: "input_text",
+                    text: `Fetch dog line to speak verbatim:\n${line}`,
+                  },
+                ],
+              },
+            ],
+            output_modalities: ["audio"],
+            instructions: "Speak the provided Fetch dog line exactly once. Do not add anything before or after it.",
+          },
+        });
+        const done = new Promise((resolve, reject) => {
+          state.realtimePending = {
+            resolve,
+            reject,
+            timeout: window.setTimeout(() => {
+              settleRealtimePending(new Error("response timeout"));
+            }, 12000),
+          };
+        });
+
+        try {
+          channel.send(event);
+        } catch (err) {
+          const error = err instanceof Error ? err : new Error("data channel send failed");
+          const pending = state.realtimePending;
+          if (pending) {
+            state.realtimePending = null;
+            window.clearTimeout(pending.timeout);
+          }
+          throw error;
+        }
+        await done;
+      }
+
+      function shouldUseRealtimeAudio() {
+        return (
+          state.realtimeAvailable &&
+          state.audioRoute === "realtime_then_speak" &&
+          !state.realtimeDisabled
+        );
+      }
+
       async function speak(text = els.line.textContent) {
         if (!text) {
           return;
         }
+        if (shouldUseRealtimeAudio()) {
+          try {
+            await speakRealtime(text);
+            return;
+          } catch (err) {
+            log(`realtime ${err.message}; falling back to tts`);
+          }
+        }
+
         const response = await fetch("/speak", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2352,6 +2660,10 @@
         }
         const blob = await response.blob();
         const url = URL.createObjectURL(blob);
+        if (els.audio.src && els.audio.src.startsWith('blob:')) {
+          URL.revokeObjectURL(els.audio.src);
+        }
+        els.audio.srcObject = null;
         els.audio.src = url;
         await els.audio.play();
       }
@@ -2823,6 +3135,7 @@
         state.scanning = false;
         state.workflow = "find_guest";
         setScanPending(false);
+        closeRealtimeVoiceSession();
         if (state.timer) {
           window.clearInterval(state.timer);
           state.timer = null;
@@ -2865,6 +3178,7 @@
       }
 
       els.recordToggle.addEventListener("click", toggleAutomation);
+      window.addEventListener("beforeunload", closeRealtimeVoiceSession);
       els.photoPreview.addEventListener("error", () => {
         els.photoPreview.removeAttribute("src");
         els.downloadLink.hidden = true;

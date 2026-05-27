@@ -57,7 +57,7 @@ Tap `Record` to start the 1 second scan loop.
 
 ## iPhone Depth
 
-The browser version streams RGB camera frames and can play OpenAI-generated audio.
+The browser version streams RGB camera frames and can play provider-generated audio.
 Safari does not expose raw LiDAR depth to JavaScript, so true iPhone LiDAR testing
 uses the optional Record3D USB adapter. Start Record3D with USB streaming enabled,
 press the red record toggle, then run the middleware with `--record3d`.
@@ -72,6 +72,7 @@ The adapter exposes:
 - `POST /record3d/restart`
 - `POST /record3d/analyze`
 - `POST /photos/save`
+- `POST /realtime/client-secret`
 - `POST /robot/preflight`
 - `POST /robot/action`
 
@@ -93,8 +94,50 @@ python -m dimos.experimental.fetch.iphone_middleware \
 ```
 
 Gemini defaults to `gemini-3.5-flash`; pass `--model` only to override it.
-`GOOGLE_API_KEY` is also accepted as a fallback for Gemini. The `/speak` endpoint
-still uses OpenAI TTS, so set `OPENAI_API_KEY` only if you want browser audio.
+`GOOGLE_API_KEY` is also accepted as a fallback for Gemini. Browser audio is
+configured separately with `--tts-provider`.
+
+## Audio
+
+Browser speech uses `/speak` by default. With `--tts-provider gemini`, `/speak`
+uses Gemini Live TTS and requires `GEMINI_API_KEY` or `GOOGLE_API_KEY`. With
+`--tts-provider openai`, `/speak` uses OpenAI TTS and requires `OPENAI_API_KEY`.
+
+OpenAI Realtime WebRTC is optional. Enable it explicitly with
+`--enable-realtime`; the browser will try Realtime first and fall back to
+`/speak` if setup or playback fails.
+
+Demo note: `/realtime/client-secret` is intentionally unauthenticated for local
+live-demo use. Add an access gate before running this adapter on a shared or
+public network.
+
+```bash
+export OPENAI_API_KEY=<YOUR_KEY>
+python -m dimos.experimental.fetch.iphone_middleware \
+  --host 0.0.0.0 \
+  --port 8455 \
+  --tts-provider openai \
+  --enable-realtime \
+  --realtime-model gpt-realtime-2 \
+  --realtime-reasoning-effort low \
+  --tts-voice echo
+```
+
+For Gemini Live TTS as the primary browser audio route:
+
+```bash
+export GEMINI_API_KEY=<YOUR_KEY>
+python -m dimos.experimental.fetch.iphone_middleware \
+  --host 0.0.0.0 \
+  --port 8455 \
+  --tts-provider gemini \
+  --tts-voice Charon
+```
+
+`gpt-realtime-translate` is not wired into this prototype yet. It uses the
+dedicated `/v1/realtime/translations` flow for continuous live interpretation,
+while Fetch currently only needs one-way dog speech for generated offer and
+photo-coaching lines.
 
 ## WebSocket Frame
 
