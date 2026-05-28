@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -216,6 +217,29 @@ def test_cli_defaults_to_gemini_tts(monkeypatch) -> None:
     assert args.tts_provider == "gemini"
 
 
+def test_hello_conversation_enabled() -> None:
+    middleware = iphone_middleware.FetchIphoneMiddleware(
+        conversation_mode="gemini_live",
+    )
+
+    with TestClient(middleware.server.app).websocket_connect("/fetch/ws") as ws:
+        hello = ws.receive_json()
+
+    assert hello["conversation_enabled"] is True
+    assert hello["audio_route"] == "gemini_live_conversation"
+    assert hello["conversation_model"] == tts.DEFAULT_GEMINI_TTS_MODEL
+
+
+def test_hello_conversation_disabled_by_default() -> None:
+    middleware = iphone_middleware.FetchIphoneMiddleware()
+
+    with TestClient(middleware.server.app).websocket_connect("/fetch/ws") as ws:
+        hello = ws.receive_json()
+
+    assert hello["conversation_enabled"] is False
+    assert hello["audio_route"] == "speak"
+
+
 def test_hello_advertises_gemini_speak_route() -> None:
     middleware = iphone_middleware.FetchIphoneMiddleware(
         tts_provider="gemini",
@@ -242,6 +266,80 @@ def test_hello_advertises_openai_realtime_when_enabled() -> None:
     assert hello["tts_provider"] == "openai"
     assert hello["audio_route"] == "realtime_then_speak"
     assert hello["realtime_enabled"] is True
+
+
+class _FakeConversationSession:
+    instances: list["_FakeConversationSession"] = []
+
+    def __init__(self, **kwargs: object) -> None:
+        self.kwargs = kwargs
+        self.opened = False
+        self.closed = False
+        self.mic: list[bytes] = []
+        self.finished = False
+        self._run = asyncio.Event()
+        _FakeConversationSession.instances.append(self)
+
+    async def open(self) -> None:
+        self.opened = True
+
+    async def run(self) -> None:
+        await self._run.wait()
+
+    async def close(self) -> None:
+        self.closed = True
+        self._run.set()
+
+    def push_mic(self, pcm: bytes) -> None:
+        self.mic.append(pcm)
+
+
+def test_conversation_start_opens_session() -> None:
+    _FakeConversationSession.instances = []
+    middleware = iphone_middleware.FetchIphoneMiddleware(conversation_mode="gemini_live")
+
+    with patch("iphone_middleware.LiveConversationSession", _FakeConversationSession):
+        with TestClient(middleware.server.app).websocket_connect("/fetch/ws") as ws:
+            ws.receive_json()  # hello
+            ws.send_json({"type": "conversation_start", "context": "nice straw hat"})
+            state = ws.receive_json()
+
+    assert state["type"] == "conversation_state"
+    assert state["state"] == "active"
+    assert len(_FakeConversationSession.instances) == 1
+    session = _FakeConversationSession.instances[0]
+    assert session.opened is True
+    assert session.kwargs["system_context"] == "nice straw hat"
+    assert session.kwargs["model"] == tts.DEFAULT_GEMINI_TTS_MODEL
+
+
+def test_mic_chunk_forwarded_to_session() -> None:
+    _FakeConversationSession.instances = []
+    middleware = iphone_middleware.FetchIphoneMiddleware(conversation_mode="gemini_live")
+
+    with patch("iphone_middleware.LiveConversationSession", _FakeConversationSession):
+        with TestClient(middleware.server.app).websocket_connect("/fetch/ws") as ws:
+            ws.receive_json()  # hello
+            ws.send_json({"type": "conversation_start", "context": ""})
+            ws.receive_json()  # conversation_state active
+            ws.send_json({"type": "mic_chunk", "data": "aGVsbG8="})
+            ws.send_json({"type": "conversation_stop"})
+
+    session = _FakeConversationSession.instances[0]
+    assert session.mic == [b"hello"]
+    assert session.closed is True
+
+
+def test_conversation_start_rejected_when_disabled() -> None:
+    middleware = iphone_middleware.FetchIphoneMiddleware()
+
+    with TestClient(middleware.server.app).websocket_connect("/fetch/ws") as ws:
+        ws.receive_json()  # hello
+        ws.send_json({"type": "conversation_start", "context": ""})
+        message = ws.receive_json()
+
+    assert message["type"] == "error"
+    assert "disabled" in message["message"]
 
 
 def test_speak_uses_gemini_tts_without_openai_client(monkeypatch) -> None:

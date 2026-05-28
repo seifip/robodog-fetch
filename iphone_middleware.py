@@ -23,7 +23,7 @@ import os
 from pathlib import Path
 from threading import Event, Lock, Thread
 import time
-from typing import Any, cast
+from typing import Any, Awaitable, Callable, cast
 
 from dotenv import load_dotenv
 from fastapi import WebSocket, WebSocketDisconnect
@@ -46,16 +46,22 @@ from dimos.experimental.fetch.policy import (
 from dimos.experimental.fetch.record3d_source import Record3DSource
 try:
     from dimos.experimental.fetch.tts import (
+        DEFAULT_GEMINI_TTS_MODEL,
         TtsProvider,
         gemini_live_tts,
         map_voice,
     )
 except ModuleNotFoundError:
     from tts import (  # type: ignore[no-redef]
+        DEFAULT_GEMINI_TTS_MODEL,
         TtsProvider,
         gemini_live_tts,
         map_voice,
     )
+try:
+    from dimos.experimental.fetch.conversation import LiveConversationSession
+except ModuleNotFoundError:
+    from conversation import LiveConversationSession  # type: ignore[no-redef]
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.Image import Image
@@ -72,6 +78,7 @@ CAPTURE_DIR = STATIC_DIR / "captures"
 DEFAULT_PORT = 8455
 GO2_LIDAR_STARTUP_TIMEOUT_S = 12.0
 GO2_LIDAR_STALE_TIMEOUT_S = 8.0
+CONVERSATION_IDLE_TIMEOUT_S = 30.0
 
 
 def _safe_percentile(values: np.ndarray, percentile: float) -> float | None:
@@ -317,7 +324,7 @@ class Go2Source:
                 return {"enabled": True, "ok": True, "response": self._sport(conn, 1016)}
             if action == "dance":
                 return {"enabled": True, "ok": True, "response": self._sport(conn, 1022)}
-            if action == "stand":
+            if action == "stand" or action == "stop":
                 return {"enabled": True, "ok": True, "response": self._sport(conn, 1002)}
             return {"enabled": True, "ok": False, "message": f"Unknown robot action {action!r}"}
 
@@ -563,12 +570,18 @@ class FetchIphoneMiddleware:
         record3d_device_index: int = 0,
         robot_ip: str | None = None,
         robot_connection_method: str = "local_ap",
+        conversation_mode: str = "off",
+        conversation_model: str = DEFAULT_GEMINI_TTS_MODEL,
     ) -> None:
         self.host = host
         self.port = port
         self.tts_provider = _validate_tts_provider(tts_provider)
         self.tts_model = tts_model
         self.tts_voice = tts_voice
+        self.conversation_enabled = conversation_mode == "gemini_live"
+        self.conversation_model = conversation_model
+        self._conv_session: Any | None = None
+        self._conversation_active = False
         self.realtime_enabled = bool(enable_realtime and self.tts_provider == "openai")
         self.realtime_model = realtime_model.strip()
         if not self.realtime_model:
@@ -593,7 +606,121 @@ class FetchIphoneMiddleware:
         self._setup_routes()
 
     def _audio_route(self) -> str:
+        if self.conversation_enabled:
+            return "gemini_live_conversation"
         return "realtime_then_speak" if self.realtime_enabled else "speak"
+
+    async def _robot_action_async(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if self._go2_source is None:
+            return {"enabled": False, "ok": False, "message": "Robot IP is not configured"}
+        return await asyncio.to_thread(self._go2_source.action, payload)
+
+    async def _analyze_message(
+        self, message: dict[str, Any], message_type: str
+    ) -> dict[str, Any]:
+        phase = str(message.get("interaction_phase") or "find_guest")
+        if message_type == "dog_frame":
+            if self._go2_source is None:
+                return {"type": "error", "message": "Go2 camera is not enabled"}
+            status = self._go2_source.status()
+            if not status["streaming"]:
+                return {"type": "error", "message": "Go2 camera is not streaming yet", "dog": status}
+            image_data_url = self._go2_source.latest_data_url()
+            if image_data_url is None:
+                return {"type": "error", "message": "No Go2 camera frame received yet"}
+            decision = await asyncio.to_thread(
+                self.policy.analyze_frame, image_data_url, self._go2_source.depth_hint(), phase
+            )
+            decision["frame_id"] = message.get("frame_id")
+            decision["dog"] = self._go2_source.status()
+            return decision
+        if message_type == "record3d_frame":
+            if self._record3d_source is None:
+                return {"type": "error", "message": "Record3D is not enabled"}
+            frame = self._record3d_source.latest()
+            if frame is None:
+                return {"type": "error", "message": "No Record3D frame received yet"}
+            decision = await asyncio.to_thread(
+                self.policy.analyze_frame, frame.image_data_url, frame.depth_hint, phase
+            )
+            decision["frame_id"] = message.get("frame_id")
+            decision["record3d"] = self._record3d_source.status()
+            return decision
+        image_data_url = str(message.get("image") or "")
+        depth_hint = message.get("depth_hint")
+        decision = await asyncio.to_thread(
+            self.policy.analyze_frame,
+            image_data_url,
+            depth_hint if isinstance(depth_hint, dict) else None,
+            phase,
+        )
+        decision["frame_id"] = message.get("frame_id")
+        return decision
+
+    async def _route_frame(
+        self,
+        send_json: Callable[[dict[str, Any]], Awaitable[None]],
+        message: dict[str, Any],
+        message_type: str,
+    ) -> None:
+        result = await self._analyze_message(message, message_type)
+        if result.get("type") == "error":
+            await send_json(result)
+            return
+        session = self._conv_session
+        if session is not None and not session.finished:
+            session.push_frame_state(result)
+            result["simulated_cmd_vel"] = {"linear_x": 0.0, "angular_z": 0.0, "duration_s": 0.0}
+        await send_json(result)
+
+    async def _start_conversation(
+        self,
+        send_json: Callable[[dict[str, Any]], Awaitable[None]],
+        context: str,
+    ) -> None:
+        if not self.conversation_enabled:
+            await send_json({"type": "error", "message": "Conversation mode is disabled"})
+            return
+        if self._conv_session is not None and not self._conv_session.finished:
+            return
+        session = LiveConversationSession(
+            emit=send_json,
+            robot_action=self._robot_action_async,
+            voice=self.tts_voice,
+            model=self.conversation_model,
+            system_context=context,
+            idle_timeout_s=CONVERSATION_IDLE_TIMEOUT_S,
+        )
+        try:
+            await session.open()
+        except Exception as exc:
+            logger.exception("Failed to open conversation session")
+            await send_json({"type": "error", "message": f"Conversation error: {exc}"})
+            await send_json(
+                {"type": "conversation_state", "state": "reset", "data": {"reason": "open_failed"}}
+            )
+            return
+        self._conv_session = session
+        self._conversation_active = True
+        await send_json({"type": "conversation_state", "state": "active", "data": {}})
+        asyncio.create_task(self._run_conversation(session))
+
+    async def _run_conversation(self, session: Any) -> None:
+        try:
+            await session.run()
+        except Exception:
+            logger.exception("Conversation session ended with error")
+        finally:
+            if self._conv_session is session:
+                self._conv_session = None
+                self._conversation_active = False
+
+    async def _stop_conversation(self) -> None:
+        session = self._conv_session
+        self._conv_session = None
+        self._conversation_active = False
+        if session is not None:
+            await session.close()
 
     def _get_openai_client(self) -> OpenAI | None:
         if not os.getenv("OPENAI_API_KEY"):
@@ -635,6 +762,8 @@ class FetchIphoneMiddleware:
                 "tts_provider": self.tts_provider,
                 "audio_route": self._audio_route(),
                 "realtime_enabled": self.realtime_enabled,
+                "conversation_enabled": self.conversation_enabled,
+                "conversation_model": self.conversation_model,
             }
 
         @self.server.app.post("/robot/preflight")
@@ -958,94 +1087,67 @@ class FetchIphoneMiddleware:
                     "tts_provider": self.tts_provider,
                     "audio_route": self._audio_route(),
                     "realtime_enabled": self.realtime_enabled,
+                    "conversation_enabled": self.conversation_enabled,
+                    "conversation_model": self.conversation_model,
                 }
             )
             logger.info("Fetch iPhone client connected")
+            send_lock = asyncio.Lock()
+
+            async def send_json(payload: dict[str, Any]) -> None:
+                async with send_lock:
+                    await ws.send_json(payload)
+
             try:
                 while True:
                     message = await ws.receive_json()
                     message_type = message.get("type")
-                    if message_type == "dog_frame":
-                        if self._go2_source is None:
-                            await ws.send_json({"type": "error", "message": "Go2 camera is not enabled"})
-                            continue
-                        status = self._go2_source.status()
-                        if not status["streaming"]:
-                            await ws.send_json(
-                                {
-                                    "type": "error",
-                                    "message": "Go2 camera is not streaming yet",
-                                    "dog": status,
-                                }
-                            )
-                            continue
-                        image_data_url = self._go2_source.latest_data_url()
-                        if image_data_url is None:
-                            await ws.send_json(
-                                {"type": "error", "message": "No Go2 camera frame received yet"}
-                            )
-                            continue
-                        decision = await asyncio.to_thread(
-                            self.policy.analyze_frame,
-                            image_data_url,
-                            self._go2_source.depth_hint(),
-                            str(message.get("interaction_phase") or "find_guest"),
-                        )
-                        decision["frame_id"] = message.get("frame_id")
-                        decision["dog"] = self._go2_source.status()
-                        await ws.send_json(decision)
-                        continue
 
-                    if message_type == "record3d_frame":
-                        if self._record3d_source is None:
-                            await ws.send_json(
-                                {"type": "error", "message": "Record3D is not enabled"}
-                            )
-                            continue
-                        frame = self._record3d_source.latest()
-                        if frame is None:
-                            await ws.send_json(
-                                {"type": "error", "message": "No Record3D frame received yet"}
-                            )
-                            continue
-                        decision = await asyncio.to_thread(
-                            self.policy.analyze_frame,
-                            frame.image_data_url,
-                            frame.depth_hint,
-                            str(message.get("interaction_phase") or "find_guest"),
-                        )
-                        decision["frame_id"] = message.get("frame_id")
-                        decision["record3d"] = self._record3d_source.status()
-                        await ws.send_json(decision)
-                        continue
-
-                    if message_type != "frame":
-                        await ws.send_json(
-                            {
-                                "type": "error",
-                                "message": "Expected frame, dog_frame, or record3d_frame message",
-                            }
+                    if message_type == "conversation_start":
+                        await self._start_conversation(
+                            send_json, str(message.get("context") or "")
                         )
                         continue
+                    if message_type == "conversation_stop":
+                        await self._stop_conversation()
+                        continue
+                    if message_type == "mic_chunk":
+                        session = self._conv_session
+                        if session is not None and not session.finished:
+                            try:
+                                pcm = base64.b64decode(message.get("data") or "")
+                            except (ValueError, base64.binascii.Error):
+                                pcm = b""
+                            if pcm:
+                                session.push_mic(pcm)
+                        continue
 
-                    image_data_url = str(message.get("image") or "")
-                    depth_hint = message.get("depth_hint")
-                    decision = await asyncio.to_thread(
-                        self.policy.analyze_frame,
-                        image_data_url,
-                        depth_hint if isinstance(depth_hint, dict) else None,
-                        str(message.get("interaction_phase") or "find_guest"),
+                    if message_type in ("frame", "dog_frame", "record3d_frame"):
+                        if self._conversation_active:
+                            message["interaction_phase"] = "confirm_bottle"
+                            asyncio.create_task(
+                                self._route_frame(send_json, message, message_type)
+                            )
+                        else:
+                            await self._route_frame(send_json, message, message_type)
+                        continue
+
+                    await send_json(
+                        {
+                            "type": "error",
+                            "message": "Expected frame, dog_frame, or record3d_frame message",
+                        }
                     )
-                    decision["frame_id"] = message.get("frame_id")
-                    await ws.send_json(decision)
             except WebSocketDisconnect:
                 logger.info("Fetch iPhone client disconnected")
             except Exception as exc:
                 logger.exception("Fetch WebSocket error")
                 try:
-                    await ws.send_json({"type": "error", "message": str(exc)})
+                    await send_json({"type": "error", "message": str(exc)})
                 except Exception:
                     pass
+            finally:
+                await self._stop_conversation()
 
     def run(self, ssl: bool = True) -> None:
         if self._go2_source is not None:
@@ -1102,6 +1204,17 @@ def _parse_args() -> argparse.Namespace:
         default=DEFAULT_REALTIME_REASONING_EFFORT,
         help="Reasoning effort for optional Realtime voice playback.",
     )
+    parser.add_argument(
+        "--conversation-mode",
+        choices=("off", "gemini_live"),
+        default="off",
+        help="Enable persistent Gemini Live bidirectional conversation on greet.",
+    )
+    parser.add_argument(
+        "--conversation-model",
+        default=DEFAULT_GEMINI_TTS_MODEL,
+        help="Gemini Live model for two-way conversation (must support audio in + tools).",
+    )
     parser.add_argument("--record3d", action="store_true", help="Read RGBD frames from Record3D over USB.")
     parser.add_argument("--record3d-device-index", type=int, default=0, help="Record3D device index.")
     parser.add_argument("--robot-ip", default=None, help="Optional live Unitree Go2 IP for Fetch actions.")
@@ -1143,6 +1256,8 @@ def main() -> None:
         record3d_device_index=args.record3d_device_index,
         robot_ip=args.robot_ip,
         robot_connection_method=args.robot_connection_method,
+        conversation_mode=args.conversation_mode,
+        conversation_model=args.conversation_model,
     )
     scheme = "http" if args.no_ssl else "https"
     logger.info(
