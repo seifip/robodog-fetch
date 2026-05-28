@@ -2050,6 +2050,24 @@
         display: none !important;
       }
 
+      .photo-frame:has(#photoPreview[src]:not([src=""]))::after {
+        position: absolute;
+        inset: auto 0 0 auto;
+        z-index: 3;
+        display: block !important;
+        width: min(48%, 320px);
+        aspect-ratio: 1;
+        background: radial-gradient(
+          circle at 82% 82%,
+          oklch(100% 0 0 / 0.72) 0%,
+          oklch(100% 0 0 / 0.42) 32%,
+          oklch(100% 0 0 / 0.16) 58%,
+          transparent 76%
+        );
+        content: "";
+        pointer-events: none;
+      }
+
       .photo-frame:has(#photoPreview[src]:not([src=""]))::before {
         display: none !important;
       }
@@ -2079,6 +2097,7 @@
 
       .photo-frame:has(#photoPreview[src]:not([src=""])) .photo-watermark {
         inset: auto 38px 92px auto;
+        z-index: 4;
         width: min(24%, 170px) !important;
         max-height: none;
         margin: 0;
