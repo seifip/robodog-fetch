@@ -6,11 +6,9 @@
 
 **A robot dog that trades ice-cold Cokes for instant photos.**
 
-[Demo video](#) · [Quickstart](#quickstart-run-it-yourself) · [How it works](#how-it-works-at-a-glance) · [Technical reference](#technical-reference)
+[Demo video](https://www.youtube.com/watch?v=8hHYE1239wg) · [Quickstart](#quickstart-run-it-yourself) · [How it works](#how-it-works-at-a-glance) · [Technical reference](#technical-reference)
 
 </div>
-
-> Replace the demo-video link above with the final recording before submitting.
 
 ---
 
