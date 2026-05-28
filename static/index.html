@@ -2359,15 +2359,18 @@
         els.motion.textContent = "wave";
         await robotAction({ action: "wave" });
         if (state.conversationEnabled) {
-          state.conversationActive = true;
-          state.lastConvFrameAt = Date.now();
-          setWorkflow("confirm_bottle", "Live conversation: taking the order and photo.");
-          if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-            state.ws.send(JSON.stringify({ type: "conversation_start", context: message.line }));
-          }
           await startMic();
-          log("live conversation started");
-          return;
+          if (state.micStream) {
+            state.conversationActive = true;
+            state.lastConvFrameAt = Date.now();
+            setWorkflow("confirm_bottle", "Live conversation: taking the order and photo.");
+            if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+              state.ws.send(JSON.stringify({ type: "conversation_start", context: message.line }));
+            }
+            log("live conversation started");
+            return;
+          }
+          log("mic unavailable; using scripted offer");
         }
         log("wave and Coke-for-photo offer");
         await speakOnce(message.line, "spoke joke and offer");
@@ -2913,7 +2916,12 @@
       }
 
       function base64ToInt16(b64) {
-        const binary = atob(b64);
+        let binary;
+        try {
+          binary = atob(b64 || "");
+        } catch {
+          return new Int16Array(0);
+        }
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) {
           bytes[i] = binary.charCodeAt(i);
@@ -3021,8 +3029,11 @@
             `;
             const blob = new Blob([processorCode], { type: "application/javascript" });
             const url = URL.createObjectURL(blob);
-            await ctx.audioWorklet.addModule(url);
-            URL.revokeObjectURL(url);
+            try {
+              await ctx.audioWorklet.addModule(url);
+            } finally {
+              URL.revokeObjectURL(url);
+            }
             const node = new AudioWorkletNode(ctx, "mic-processor");
             node.port.onmessage = (event) => sendChunk(event.data);
             source.connect(node);
@@ -3040,7 +3051,12 @@
         const node = ctx.createScriptProcessor(4096, 1, 1);
         node.onaudioprocess = (event) => sendChunk(event.inputBuffer.getChannelData(0));
         source.connect(node);
-        node.connect(ctx.destination);
+        // Route through a muted gain node: a ScriptProcessor must stay connected
+        // to a destination to keep firing, but we don't want to monitor the mic.
+        const sink = ctx.createGain();
+        sink.gain.value = 0;
+        node.connect(sink);
+        sink.connect(ctx.destination);
         state.micScriptNode = node;
       }
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import ClassVar
 from unittest.mock import AsyncMock, patch
 import sys
 
@@ -122,6 +123,19 @@ _module("unitree_webrtc_connect", constants=SimpleNamespace(RTC_TOPIC={"SPORT_MO
 _module("unitree_webrtc_connect.constants", RTC_TOPIC={"SPORT_MOD": "sport"})
 
 import iphone_middleware
+
+
+_LOOP = None
+
+
+def _run(coro):
+    """Run a coroutine on a single reused loop, left set as current, so this
+    module never closes/clears the loop that sibling test modules rely on."""
+    global _LOOP
+    if _LOOP is None or _LOOP.is_closed():
+        _LOOP = asyncio.new_event_loop()
+    asyncio.set_event_loop(_LOOP)
+    return _LOOP.run_until_complete(coro)
 
 
 def test_realtime_session_config_defaults() -> None:
@@ -269,7 +283,7 @@ def test_hello_advertises_openai_realtime_when_enabled() -> None:
 
 
 class _FakeConversationSession:
-    instances: list["_FakeConversationSession"] = []
+    instances: ClassVar[list["_FakeConversationSession"]] = []
 
     def __init__(self, **kwargs: object) -> None:
         self.kwargs = kwargs
@@ -328,6 +342,22 @@ def test_mic_chunk_forwarded_to_session() -> None:
     session = _FakeConversationSession.instances[0]
     assert session.mic == [b"hello"]
     assert session.closed is True
+
+
+def test_route_frame_safe_swallows_errors_and_notifies_client() -> None:
+    middleware = iphone_middleware.FetchIphoneMiddleware()
+    sent: list[dict] = []
+
+    async def send_json(message: dict) -> None:
+        sent.append(message)
+
+    async def boom(*_args: object, **_kwargs: object) -> dict:
+        raise RuntimeError("analyze boom")
+
+    middleware._analyze_message = boom  # type: ignore[assignment]
+    _run(middleware._route_frame_safe(send_json, {"type": "frame"}, "frame"))
+
+    assert any(m.get("type") == "error" for m in sent)
 
 
 def test_conversation_start_rejected_when_disabled() -> None:

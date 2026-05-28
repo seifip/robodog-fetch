@@ -673,6 +673,25 @@ class FetchIphoneMiddleware:
             result["simulated_cmd_vel"] = {"linear_x": 0.0, "angular_z": 0.0, "duration_s": 0.0}
         await send_json(result)
 
+    async def _route_frame_safe(
+        self,
+        send_json: Callable[[dict[str, Any]], Awaitable[None]],
+        message: dict[str, Any],
+        message_type: str,
+    ) -> None:
+        # Used for fire-and-forget frame analysis during a conversation. Without
+        # this, an exception (e.g. the client disconnects mid-send) would be an
+        # unretrieved task exception and would leave the browser's pending-frame
+        # gate stuck, stalling framing hints. Best-effort error keeps it moving.
+        try:
+            await self._route_frame(send_json, message, message_type)
+        except Exception:
+            logger.exception("conversation frame routing failed")
+            try:
+                await send_json({"type": "error", "message": "frame analysis failed"})
+            except Exception:
+                pass
+
     async def _start_conversation(
         self,
         send_json: Callable[[dict[str, Any]], Awaitable[None]],
@@ -1126,7 +1145,7 @@ class FetchIphoneMiddleware:
                         if self._conversation_active:
                             message["interaction_phase"] = "confirm_bottle"
                             asyncio.create_task(
-                                self._route_frame(send_json, message, message_type)
+                                self._route_frame_safe(send_json, message, message_type)
                             )
                         else:
                             await self._route_frame(send_json, message, message_type)
