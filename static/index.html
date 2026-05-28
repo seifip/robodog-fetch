@@ -1915,6 +1915,55 @@
         display: none;
       }
 
+      body.dog-mode .dog-preview {
+        object-position: 82% center;
+      }
+
+      body.dog-mode .dog-lidar-pane {
+        transition:
+          width 180ms ease,
+          height 180ms ease,
+          box-shadow 180ms ease,
+          background 180ms ease;
+      }
+
+      body.dog-mode .dog-lidar-pane:not(.has-lidar) {
+        width: auto;
+        min-width: 0;
+        height: auto;
+        aspect-ratio: auto;
+        overflow: visible;
+        border: 0;
+        background: transparent;
+        box-shadow: none;
+        backdrop-filter: none;
+      }
+
+      body.dog-mode .dog-lidar-pane:not(.has-lidar) .stream-label,
+      body.dog-mode .dog-lidar-pane:not(.has-lidar) .dog-lidar-preview {
+        display: none;
+      }
+
+      body.dog-mode .dog-lidar-pane:not(.has-lidar)::before {
+        display: inline-flex;
+        align-items: center;
+        min-height: 36px;
+        border: 1px solid oklch(78% 0.012 225);
+        border-radius: 8px;
+        padding: 8px 12px;
+        background: oklch(100% 0.012 195 / 0.82);
+        color: oklch(70% 0.012 225);
+        content: "NO LIDAR SIGNAL";
+        font-family: var(--font-display);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        line-height: 1;
+        text-transform: uppercase;
+        white-space: nowrap;
+        backdrop-filter: blur(12px);
+      }
+
       .stage {
         grid-template-rows: minmax(0, 1fr) auto;
         gap: 10px;
