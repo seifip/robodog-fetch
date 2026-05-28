@@ -77,11 +77,10 @@ logger = setup_logger()
 
 STATIC_DIR = Path(__file__).parent / "static"
 CAPTURE_DIR = STATIC_DIR / "captures"
-ICLOUD_FETCH_DIR = Path.home() / "Library/Mobile Documents/com~apple~CloudDocs/fetch"
-GOOGLE_DRIVE_FETCH_DIR = (
-    Path.home()
-    / "Library/CloudStorage/GoogleDrive-seifip@gmail.com/My Drive/robodog-fetch"
-)
+# Optional extra folders to copy each saved photo into so the demo phone syncs it
+# automatically (e.g. an iCloud Drive or Google Drive folder). Set
+# FETCH_PHOTO_MIRROR_DIRS to an os.pathsep-separated list of paths; "~" is expanded.
+PHOTO_MIRROR_DIRS_ENV = "FETCH_PHOTO_MIRROR_DIRS"
 DEFAULT_PORT = 8455
 DEFAULT_OPENAI_TTS_MODEL = "tts-1"
 GO2_LIDAR_STARTUP_TIMEOUT_S = 12.0
@@ -559,17 +558,26 @@ def _jsonable_openai_response(response: Any) -> dict[str, Any]:
     }
 
 
-def _save_fetch_photo(image_bytes: bytes, filename: str) -> tuple[Path, Path, Path]:
+def _photo_mirror_dirs() -> list[Path]:
+    raw = os.environ.get(PHOTO_MIRROR_DIRS_ENV, "")
+    return [Path(part).expanduser() for part in raw.split(os.pathsep) if part.strip()]
+
+
+def _save_fetch_photo(image_bytes: bytes, filename: str) -> tuple[Path, list[Path]]:
     CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
-    ICLOUD_FETCH_DIR.mkdir(parents=True, exist_ok=True)
-    GOOGLE_DRIVE_FETCH_DIR.mkdir(parents=True, exist_ok=True)
     capture_path = CAPTURE_DIR / filename
-    icloud_path = ICLOUD_FETCH_DIR / filename
-    google_drive_path = GOOGLE_DRIVE_FETCH_DIR / filename
     capture_path.write_bytes(image_bytes)
-    icloud_path.write_bytes(image_bytes)
-    google_drive_path.write_bytes(image_bytes)
-    return capture_path, icloud_path, google_drive_path
+    mirror_paths: list[Path] = []
+    for mirror_dir in _photo_mirror_dirs():
+        try:
+            mirror_dir.mkdir(parents=True, exist_ok=True)
+            mirror_path = mirror_dir / filename
+            mirror_path.write_bytes(image_bytes)
+        except OSError as exc:
+            logger.warning("Could not mirror photo to %s: %s", mirror_dir, exc)
+            continue
+        mirror_paths.append(mirror_path)
+    return capture_path, mirror_paths
 
 
 class FetchIphoneMiddleware:
@@ -1035,13 +1043,12 @@ class FetchIphoneMiddleware:
                 return JSONResponse({"error": "No image available to save"}, status_code=404)
 
             filename = f"fetch-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.jpg"
-            path, icloud_path, google_drive_path = _save_fetch_photo(image_bytes, filename)
+            path, mirror_paths = _save_fetch_photo(image_bytes, filename)
             return {
                 "saved": True,
                 "url": f"/fetch/static/captures/{filename}",
                 "path": str(path),
-                "icloud_path": str(icloud_path),
-                "google_drive_path": str(google_drive_path),
+                "mirror_paths": [str(p) for p in mirror_paths],
             }
 
         @self.server.app.post("/speak")

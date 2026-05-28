@@ -1,289 +1,259 @@
-# Fetch Prototype
+<div align="center">
 
-This prototype turns the dog behavior into a testable state machine before the
-robot is available. It reuses the same DimOS web pattern as phone teleop:
-a FastAPI server exposes an HTTPS phone UI, the phone streams camera frames over
-WebSocket, and the server returns motion/speech/photo decisions.
+<img src="static/logo.png" alt="Fetch" width="240" />
 
-## Behavior
+# Fetch
 
-1. Run the robot preflight: recovery stand, balance stand, and joystick handoff.
-2. Actively look around by turning in place until a good Coke/photo target is visible: someone centered in frame and looking toward the dog who seems chill, thirsty, amused, curious, playful, social, or likely to enjoy a free Coke from a robot dog.
-3. Treat phone, book, laptop, food, or drink as weak busy signals only when the person looks engrossed or unavailable.
-4. Approach only if the path looks safe.
-5. Stop once the target is within 4 meters.
-6. Wave and say a personalized joke based on visible, non-sensitive appearance/context.
-7. Tell the person to take a Coke from the dog's back first, then pose for an instant photo.
-8. Coach them to hold the Coke out front and center themselves in the frame.
-9. Say a photographer cue, save the photo, play a print sound, tell them the photo is ready, and trigger a dance.
+**A robot dog that trades ice-cold Cokes for instant photos.**
 
-The prototype does not infer identity or sensitive traits. Humor is constrained to
-visible non-sensitive context such as setting, posture, lighting, colors, bags,
-objects nearby, or what is happening in the scene. Fetch's comedy voice is
-confessional, observational, self-deprecating, and mildly exasperated by the
-absurdity of ordinary beach logistics and being a tiny robot dog carrying soda.
+[Demo video](#) · [Quickstart](#quickstart-run-it-yourself) · [How it works](#how-it-works-at-a-glance) · [Technical reference](#technical-reference)
 
-## Run
+</div>
+
+> Replace the demo-video link above with the final recording before submitting.
+
+---
+
+## What it is
+
+Fetch is a Unitree Go2 robot dog that works a crowd like a tiny, soda-carrying
+street performer. It wanders, finds someone who looks relaxed and up for a moment
+of fun, trots over, cracks a joke about what it sees, and offers them a cold Coke
+from its back — all it asks in return is to take their photo.
+
+Under the hood, a vision LLM "reads the room" on every camera frame and decides
+where to move, what to say, and when to take the shot. It runs as a single
+FastAPI + WebSocket server, so you can try the whole behavior from a phone browser
+**before any robot is involved**.
+
+## The experience
+
+1. **Wakes up.** The dog runs its preflight (recovery stand → balance stand →
+   joystick handoff) and starts looking around.
+2. **Reads the room.** It turns in place scanning for a good guest: someone
+   centered in frame, facing the dog, who looks chill, curious, playful, or just
+   thirsty. People glued to a phone, laptop, or meal read as "busy — skip."
+3. **Approaches — carefully.** If the path looks clear, it walks over and stops
+   once the person is within ~4 meters.
+4. **Breaks the ice.** It waves and delivers a personalized one-liner riffing on
+   what's actually visible in the scene — never on who the person is.
+5. **Makes the trade.** "Grab a Coke from my back, then pose for an instant photo."
+   It coaches them to hold the Coke up and center themselves in frame.
+6. **Takes the shot.** When the framing is right, it snaps the photo, plays a
+   Polaroid print sound, tells them it's ready — and dances.
+
+Fetch's comedy voice is confessional, observational, self-deprecating, and mildly
+exasperated by the absurdity of being a tiny robot dog hauling soda around a beach.
+
+## How it works (at a glance)
+
+```
+  camera frame                vision LLM                 decision                 act
+ ┌────────────┐   image    ┌────────────┐   JSON    ┌────────────────┐       ┌──────────┐
+ │  phone cam │──(+depth)──▶│  OpenAI /  │──────────▶│ state, cmd_vel,│──────▶│ move Go2 │
+ │  Record3D  │            │   Gemini   │           │ line, photo?   │       │ speak    │
+ │  live Go2  │            └────────────┘           └────────────────┘       │ snap photo│
+ └────────────┘                                                              └──────────┘
+        ▲                                                                          │
+        └──────────────────────── ~1s scan loop ──────────────────────────────────┘
+```
+
+Fetch reuses the **DimOS teleop web pattern**: a FastAPI server serves an HTTPS
+phone UI, the phone streams camera frames over a WebSocket, and the server returns
+motion / speech / photo decisions. Three camera sources plug into the same loop:
+
+- **Phone browser camera** — zero hardware; the fastest way to try the behavior.
+- **Record3D USB (RGBD)** — real iPhone LiDAR depth, since Safari won't expose raw
+  depth to JavaScript.
+- **Live Unitree Go2** — WebRTC camera + LiDAR over the dog's Wi-Fi.
+
+## Quickstart (run it yourself)
+
+> **Prerequisite:** Fetch lives in the DimOS monorepo at `dimos/experimental/fetch/`
+> and imports DimOS modules, so run it from the monorepo root (the package must be on
+> your `PYTHONPATH`). Set whichever provider keys you'll use in `.env`:
+> `OPENAI_API_KEY`, `GEMINI_API_KEY` (or `GOOGLE_API_KEY`), `CARTESIA_API_KEY`.
+
+**1. No hardware — phone or laptop browser camera:**
 
 ```bash
-cd /Users/seifip/GitHub/fetch/dimos
+# from the DimOS monorepo root
 python -m dimos.experimental.fetch.iphone_middleware --host 0.0.0.0 --port 8455
 ```
 
-For Record3D USB RGBD input:
+Open `http://127.0.0.1:8455/fetch` and tap **Record** to start the ~1-second scan
+loop. (`localhost`/`127.0.0.1` are secure contexts, so HTTPS is optional there; a
+phone-over-LAN demo needs HTTPS — the default — or the browser blocks the camera/mic.)
+
+**2. Real iPhone LiDAR depth via Record3D USB:**
 
 ```bash
-cd /Users/seifip/GitHub/fetch/dimos
+# start Record3D with USB streaming enabled and the red record toggle on, then:
 python -m dimos.experimental.fetch.iphone_middleware --host 0.0.0.0 --port 8455 --record3d
 ```
 
-For a live Go2 on the dog Wi-Fi:
+**3. Live Unitree Go2 on the dog's Wi-Fi:**
 
 ```bash
-cd /Users/seifip/GitHub/fetch/dimos
 python -m dimos.experimental.fetch.iphone_middleware \
-  --host 0.0.0.0 \
-  --port 8455 \
+  --host 0.0.0.0 --port 8455 \
   --vision-provider gemini \
-  --robot-ip 192.168.12.1 \
-  --robot-connection-method local_ap
+  --robot-ip 192.168.12.1 --robot-connection-method local_ap
 ```
 
-Open this on the iPhone or Mac:
+Vision defaults to OpenAI `gpt-5-mini`; `--vision-provider gemini` uses
+`gemini-3.5-flash` through Gemini's OpenAI-compatible API (no LangChain). Use
+`--no-ssl` for quick local debugging.
 
-```text
-http://127.0.0.1:8455/fetch
-```
+## Voice & conversation
 
-Tap `Record` to start the 1 second scan loop.
+Fetch can either **talk at** people (one-way TTS) or **talk with** them (two-way).
 
-## iPhone Depth
+**One-way TTS** (`/speak`) supports three providers, switchable at runtime from the
+phone UI's **Audio** button — no restart needed:
 
-The browser version streams RGB camera frames and can play provider-generated audio.
-Safari does not expose raw LiDAR depth to JavaScript, so true iPhone LiDAR testing
-uses the optional Record3D USB adapter. Start Record3D with USB streaming enabled,
-press the red record toggle, then run the middleware with `--record3d`.
+| Provider | Model | Notes |
+|---|---|---|
+| **Cartesia Sonic** (default) | `sonic-3.5-2026-05-04` | Lowest latency; needs `CARTESIA_API_KEY` |
+| **Gemini Live TTS** | `gemini-3.1-flash-live-preview` | Expressive; needs `GEMINI_API_KEY`/`GOOGLE_API_KEY` |
+| **OpenAI TTS** | `tts-1` | Needs `OPENAI_API_KEY` |
 
-The adapter exposes:
+OpenAI Realtime WebRTC is an opt-in extra (`--tts-provider openai --enable-realtime`)
+that the browser tries first and falls back to `/speak` if it fails. The UI also has a
+**Direct/Staged** approach toggle — Direct keeps the fast happy-path greet; Staged
+inserts a short settle/stand beat before the wave.
 
-- `GET /record3d/status`
-- `GET /record3d/latest.jpg`
-- `GET /record3d/latest-depth.jpg`
-- `GET /record3d/stream.mjpg`
-- `GET /record3d/stream-depth.mjpg`
-- `POST /record3d/restart`
-- `POST /record3d/analyze`
-- `POST /photos/save`
-- `POST /realtime/client-secret`
-- `POST /robot/preflight`
-- `POST /robot/action`
-
-Saved photos are written to both the local preview folder under
-`static/captures` and `~/Library/Mobile Documents/com~apple~CloudDocs/fetch`
-so they sync through iCloud Drive. They are also mirrored into
-`~/Library/CloudStorage/GoogleDrive-seifip@gmail.com/My Drive/robodog-fetch`.
-
-Record3D frames are analyzed with the RGB image plus a `depth_hint` containing
-center-depth and near-object summaries in meters. The default OpenAI vision model
-is `gpt-5-mini`.
-
-## Gemini Vision
-
-The fetch policy can use Gemini for image analysis through Gemini's
-OpenAI-compatible API, without LangChain:
+**Two-way conversation** (`--conversation-mode gemini_live`) turns the greeting into a
+real voice exchange. Once Fetch reaches a person, the browser opens the mic and streams
+audio to a persistent Gemini Live session; turn-taking and barge-in use the Live API's
+server-side voice activity detection. The model drives the dog through tool calls —
+`accept_offer`, `take_photo`, `celebrate`, `do_trick`, `stop_and_reset` — and photo
+framing is fed back in as hints so the spoken coaching matches what the camera sees.
 
 ```bash
-export GEMINI_API_KEY=<YOUR_KEY>
 python -m dimos.experimental.fetch.iphone_middleware \
-  --host 0.0.0.0 \
-  --port 8455 \
-  --vision-provider gemini
+  --host 0.0.0.0 --port 8455 \
+  --vision-provider gemini --conversation-mode gemini_live \
+  --robot-ip 192.168.12.1 --robot-connection-method local_ap
 ```
 
-Gemini defaults to `gemini-3.5-flash`; pass `--model` only to override it.
-`GOOGLE_API_KEY` is also accepted as a fallback for Gemini. Browser audio
-defaults to Cartesia Sonic TTS; pass `--tts-provider gemini` to use Gemini Live
-TTS or `--tts-provider openai` to use OpenAI TTS instead.
-
-## Audio
-
-Browser speech uses `/speak` by default. The default `/speak` provider is
-Cartesia Sonic (`sonic-3.5-2026-05-04`) and requires `CARTESIA_API_KEY`.
-With `--tts-provider openai`, `/speak` uses OpenAI TTS with `tts-1` and requires
-`OPENAI_API_KEY`. With `--tts-provider gemini`, `/speak` uses Gemini Live TTS
-(`gemini-3.1-flash-live-preview`) and requires `GEMINI_API_KEY` or
-`GOOGLE_API_KEY`. `/speak` also accepts a per-request `provider` so the browser
-modal can switch at runtime.
-
-OpenAI Realtime WebRTC is optional. Enable it explicitly with
-`--tts-provider openai --enable-realtime`; the browser will try Realtime first
-and fall back to `/speak` if setup or playback fails.
-
-Demo note: `/realtime/client-secret` is intentionally unauthenticated for local
-live-demo use. Add an access gate before running this adapter on a shared or
-public network.
+Want to compare provider latency for yourself? `scripts/latency_bench.py` measures
+real round-trip times for the vision and TTS models Fetch uses across whichever keys
+you have set:
 
 ```bash
-export OPENAI_API_KEY=<YOUR_KEY>
-python -m dimos.experimental.fetch.iphone_middleware \
-  --host 0.0.0.0 \
-  --port 8455 \
-  --tts-provider openai \
-  --enable-realtime \
-  --realtime-model gpt-realtime-2 \
-  --realtime-reasoning-effort low \
-  --tts-voice echo
+python3 scripts/latency_bench.py            # 3 runs each
+python3 scripts/latency_bench.py --runs 5
 ```
 
-For Gemini Live TTS as the primary browser audio route:
+## Safety & privacy
 
-```bash
-export GEMINI_API_KEY=<YOUR_KEY>
-python -m dimos.experimental.fetch.iphone_middleware \
-  --host 0.0.0.0 \
-  --port 8455 \
-  --tts-voice Charon
+- **No identity or sensitive-trait inference.** Humor is constrained to *visible,
+  non-sensitive context* — setting, posture, lighting, colors, nearby objects, what's
+  happening in the scene.
+- **Obstacle-aware approach.** It only moves when the path looks safe and uses
+  LiDAR/depth for the final `<4m` stop.
+- **Local-demo auth caveat.** `/realtime/client-secret` is intentionally
+  unauthenticated for local live demos and is disabled by default. Add an access gate
+  before exposing this server on a shared or public network.
+
+## Technical reference
+
+<details>
+<summary><b>State machine & interaction phases</b></summary>
+
+```
+search → approach → greet → wait_for_coke → photo_ready
+  ↑                                              │
+  └──────────────── skip ◀───────────────────────┘
 ```
 
-`gpt-realtime-translate` is not wired into this prototype yet. It uses the
-dedicated `/v1/realtime/translations` flow for continuous live interpretation,
-while Fetch currently only needs one-way dog speech for generated offer and
-photo-coaching lines.
+- **search** — scan left/right (`angular_z != 0`) for a candidate.
+- **approach** — move toward the target (`linear_x > 0`, bearing-based `angular_z`).
+- **greet** (inside 4 m) — wave and deliver the personalized joke/offer.
+- **wait_for_coke** — person hasn't framed the Coke yet; coach them.
+- **photo_ready** — Coke + person well-framed; take the photo and dance.
+- **skip** — unsafe or blocked; resume searching.
 
-## Live Conversation (Coke vendor)
+Two interaction phases drive different prompts: `find_guest` (locate and evaluate a
+person) and `confirm_coke` (check the person is holding the Coke and ready for a photo).
 
-By default Fetch only *speaks* (one-way TTS). With `--conversation-mode gemini_live`
-the dog instead holds a real two-way voice conversation once it reaches a person:
-it tells a joke, confirms the one-Coke-for-photo bit, coaches the photo, takes the picture, and
-celebrates — all driven by a persistent Gemini Live session with tool calling.
+</details>
 
-```bash
-export GEMINI_API_KEY=<YOUR_KEY>
-python -m dimos.experimental.fetch.iphone_middleware \
-  --host 0.0.0.0 \
-  --port 8455 \
-  --vision-provider gemini \
-  --conversation-mode gemini_live \
-  --robot-ip 192.168.12.1 \
-  --robot-connection-method local_ap
-```
+<details>
+<summary><b>File roles</b></summary>
 
-How it works:
+| File | Role |
+|---|---|
+| `policy.py` | Core state machine. `FetchPolicy.analyze_frame()` sends image + prompt to the vision LLM and normalizes the JSON response into a decision dict. |
+| `iphone_middleware.py` | FastAPI server. WebSocket frame routing (browser / Record3D / Go2) + REST endpoints for robot commands, TTS, Realtime secrets, and photo capture. |
+| `conversation.py` | `LiveConversationSession` — the persistent two-way Gemini Live voice session with tool calling. |
+| `conversation_prompt.py` | Conversation persona, menu, and safety rules (mirrors `policy.py`). |
+| `record3d_source.py` | Background thread reading RGBD frames from Record3D USB; produces JPEG + depth hints. |
+| `tts.py` | TTS provider helpers: Gemini Live TTS, voice-name mapping, PCM→WAV conversion. |
+| `static/index.html` | Single-page phone UI: camera feed, previews, controls, decision display, audio routing, photo flow. |
 
-- The vision state machine still drives `search → approach → greet`. At `greet` the
-  browser waves, opens the phone microphone, and hands off to a persistent
-  conversation session on the server.
-- The browser streams microphone audio (16 kHz PCM) to the server over the existing
-  `/fetch/ws` WebSocket; the server runs one `LiveConversationSession`
-  (`conversation.py`) per interaction and streams the dog's voice (24 kHz PCM) back
-  for playback. Turn-taking uses the Live API's server-side voice activity
-  detection, and talking over the dog triggers barge-in.
-- The model drives the dog through **tool calls**: `accept_offer` (one Coke from
-  the dog's back), `take_photo` (waits for the browser capture result),
-  `celebrate` (goodbye + dance), `do_trick`, and `stop_and_reset`. There is no
-  mechanical dispenser.
-- Photo framing reuses the existing vision `confirm_coke` policy: framing results
-  are injected into the live session as hints so the dog's spoken coaching matches
-  what the camera sees. The photo fires only when the person is centered,
-  clearly holding the Coke, and the shot is well framed.
-- The conversation persona, menu, and safety rules live in `conversation_prompt.py`
-  and mirror the vision policy in `policy.py`.
+</details>
 
-Requirements and notes:
+<details>
+<summary><b>WebSocket frame → decision</b></summary>
 
-- Requires `GEMINI_API_KEY` or `GOOGLE_API_KEY`. The conversation model defaults to
-  `gemini-3.1-flash-live-preview`; override with `--conversation-model`.
-- The browser needs a secure context for microphone access. `http://localhost`
-  and `http://127.0.0.1` count as secure, so `--no-ssl` is fine for local desktop
-  testing, but the phone-over-LAN demo must use HTTPS (the default) or the browser
-  blocks the mic.
-- The WebSocket `hello` advertises `audio_route: "gemini_live_conversation"` and
-  `conversation_enabled: true` so the browser knows to capture the mic. The
-  conversation adds these `/fetch/ws` message types: browser → server
-  `conversation_start`, `mic_chunk`, `conversation_event`, `conversation_stop`;
-  server → browser `audio_out`, `transcript`, `interrupted`, `conversation_state`.
-- If a conversation stalls for ~30 s, or the customer declines or walks away, the
-  dog resets and resumes scanning.
-
-## Audio mode switcher
-
-The phone UI has an **Audio** button (top right) that opens a settings modal for
-switching the audio path at runtime, without restarting the server:
-
-The header also has a **Direct/Staged** approach toggle. Direct preserves the
-fast happy-path greet; Staged inserts a short settle/stand beat before Fetch
-waves and starts the Coke handoff.
-
-- **Modes**: Live conversation, Gemini TTS (one-way), OpenAI TTS (one-way), or
-  Cartesia TTS (one-way, Cartesia Sonic — lowest latency). Set the relevant keys
-  (`OPENAI_API_KEY`, `GEMINI_API_KEY`/`GOOGLE_API_KEY`, `CARTESIA_API_KEY`) in the
-  environment / `.env` to switch freely. The server advertises which keys are
-  present (`openai_available` / `gemini_available` / `cartesia_available` in the
-  `hello` message), and the modal disables any mode whose key is missing and
-  defaults to one that works. Live additionally requires launching with
-  `--conversation-mode gemini_live`.
-- **Voice**: a shared voice name (alloy/echo/fable/onyx/nova/shimmer) — Gemini and
-  Cartesia routes map it to a matching provider voice automatically.
-- **Live model**: the Gemini Live model used for conversation.
-
-The choice persists in `localStorage`. To have both TTS and Live available in the
-modal, launch with `--conversation-mode gemini_live` (the `/speak` TTS routes stay
-available alongside it). The modal sends the selected `provider`/`voice` with
-`/speak`, and `voice`/`model` with `conversation_start`. OpenAI Realtime is not in
-the modal — it remains a separate launch flag (`--enable-realtime`).
-
-## WebSocket Frame
+The browser/source sends frames:
 
 ```json
-{
-  "type": "frame",
-  "frame_id": 1,
-  "image": "data:image/jpeg;base64,...",
-  "depth_hint": null,
-  "ts": 1779897600000
-}
+{ "type": "frame", "frame_id": 1, "image": "data:image/jpeg;base64,...", "depth_hint": null, "ts": 1779897600000 }
 ```
 
-## Decision
+The server replies with a decision:
 
 ```json
 {
   "type": "decision",
   "state": "approach",
   "candidate_found": true,
-  "target": {
-    "bearing": "center",
-    "range": "near",
-    "description": "person smiling toward the dog",
-    "free_hand_evidence": "they are looking over and seem able to take a Coke/photo",
-    "busy_signals": ["none"]
-  },
-  "simulated_cmd_vel": {
-    "linear_x": 0.22,
-    "angular_z": 0.0,
-    "duration_s": 0.9
-  },
+  "target": { "bearing": "center", "range": "near", "description": "person smiling toward the dog" },
+  "simulated_cmd_vel": { "linear_x": 0.22, "angular_z": 0.0, "duration_s": 0.9 },
   "action": "wave_offer",
   "photo_ready": false,
-  "coke_visible": false,
-  "framing": {
-    "person_visible": true,
-    "coke_visible": false,
-    "well_framed": false,
-    "notes": ""
-  },
-  "line": "That counter stance says you are ready for the tiny robot VIP treatment. Grab a Coke from my back first, then I will take your instant photo."
+  "framing": { "person_visible": true, "coke_visible": false, "well_framed": false, "notes": "" },
+  "line": "That counter stance says you're ready for the tiny robot VIP treatment. Grab a Coke from my back first."
 }
 ```
 
-## Robot Adapter Later
+</details>
 
-The `simulated_cmd_vel` output maps directly to the Go2 velocity path used in the
-direct WebRTC scripts:
+<details>
+<summary><b>REST endpoints & robot mapping</b></summary>
 
-- `linear_x`: forward velocity.
-- `angular_z`: yaw velocity.
-- `duration_s`: command duration.
+```
+GET  /record3d/status            POST /record3d/restart      POST /robot/preflight
+GET  /record3d/latest.jpg        POST /record3d/analyze      POST /robot/action
+GET  /record3d/latest-depth.jpg  POST /photos/save
+GET  /record3d/stream.mjpg       POST /realtime/client-secret
+GET  /record3d/stream-depth.mjpg
+```
 
-On the dog, use LiDAR/depth for the final `<4m` stop condition and keep obstacle
-avoidance enabled.
+`simulated_cmd_vel` maps directly onto the Go2 velocity path (despite the name, it's
+not simulation-only): `linear_x` = forward velocity, `angular_z` = yaw, `duration_s` =
+command duration. On the dog, LiDAR/depth enforces the final `<4m` stop and obstacle
+avoidance stays enabled. Saved photos are written to `static/captures/` (gitignored);
+set `FETCH_PHOTO_MIRROR_DIRS` (an `os.pathsep`-separated list of folders) to also copy
+each photo into e.g. an iCloud Drive or Google Drive folder so the demo phone syncs it.
+
+</details>
+
+## Built on DimOS
+
+Fetch is a DimOS package: it lives at `dimos/experimental/fetch/` in the
+[DimOS](https://github.com/dimensionalOS/dimos) monorepo and reuses DimOS primitives
+(Unitree WebRTC control, the teleop web/cert pattern, LiDAR). This standalone
+`robodog-fetch` repo mirrors those files so the behavior can be developed and tested
+on its own; the `python -m dimos.experimental.fetch.iphone_middleware` commands run
+from the monorepo root.
+
+## Tests
+
+```bash
+pytest -q            # all tests; providers are mocked — no real API calls
+pytest test_policy.py
+```
