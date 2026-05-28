@@ -24,6 +24,25 @@ where to move, what to say, and when to take the shot. It runs as a single
 FastAPI + WebSocket server, so you can try the whole behavior from a phone browser
 **before any robot is involved**.
 
+## Why a beach?
+
+We started by brainstorming where a quadruped earns its keep, and kept landing on the
+one thing robot dogs do that wheeled robots can't: **handle terrain**. So we framed
+Fetch around adapting the Unitree Go2 to an environment most robots avoid.
+
+We chose **sand** for a reason specific to this form factor. A quadruped's camera sits
+low to the ground, so it spends most of its time looking *up* at standing people — an
+awkward angle for face-to-face interaction. On a beach, people are usually sitting or
+lying on the sand, which drops them into the dog's natural eye-line and makes the
+human-robot interaction feel natural instead of stilted.
+
+And the hardware path is real, not hypothetical: quadrupeds already run on sand (KAIST's
+[RaiBo](https://techxplore.com/news/2023-01-raibo-versatile-robo-dog-sandy-beach.html)
+sprints across a beach at 3 m/s), and [sand-walking foot
+adaptations](https://www.popsci.com/technology/robot-moose/) — moose-inspired "booties"
+— cut foot sinkage ~46% and walking energy up to ~70%. A real beach deployment is a
+question of fitting the Go2, not inventing new science.
+
 ## The experience
 
 1. **Wakes up.** The dog runs its preflight (recovery stand → balance stand →
@@ -65,6 +84,16 @@ motion / speech / photo decisions. Three camera sources plug into the same loop:
 - **Record3D USB (RGBD)** — real iPhone LiDAR depth, since Safari won't expose raw
   depth to JavaScript.
 - **Live Unitree Go2** — WebRTC camera + LiDAR over the dog's Wi-Fi.
+
+## Engineered to feel instant
+
+The trade only lands if the interaction feels instant, so we did the UX-latency
+engineering to get there. We benchmarked real round-trip latency for every vision and
+speech model Fetch can use (`scripts/latency_bench.py`, hitting the live OpenAI / Gemini
+/ Cartesia APIs) and picked the fastest combination — **Gemini 2.5 Flash-Lite** for
+per-frame vision and **Cartesia Sonic** for speech. Camera frames are downscaled
+(≤640 px) and JPEG-compressed before they're sent for analysis, so uploads and inference
+stay quick, and the whole scan loop is tuned to land around one second.
 
 ## Quickstart (run it yourself)
 
@@ -253,6 +282,22 @@ Fetch is a DimOS package: it lives at `dimos/experimental/fetch/` in the
 `robodog-fetch` repo mirrors those files so the behavior can be developed and tested
 on its own; the `python -m dimos.experimental.fetch.iphone_middleware` commands run
 from the monorepo root.
+
+## What's next
+
+- **Sense the trade, don't just see it.** The Unitree Go2 EDU carries [foot-end force
+  sensors](https://www.unitree.com/go2/foot/) (one per foot). Lifting a ~350 g Coke off
+  the dog's back changes the total ground-reaction force those sensors report, so a
+  future version could detect the exact moment of the trade from the load change —
+  closing the interaction loop without relying on the camera's framing check.
+- **Take it to real sand.** Fit the Go2 with the sand-walking foot adaptations above for
+  an outdoor beach deployment beyond the indoor / handheld-camera demo.
+
+**The bigger picture.** Fetch is an autonomous **brand ambassador** and **mobile
+vendor** — here for Coca-Cola — that hands out product, creates a memorable branded
+moment, and walks away with the guest's photo. The longer-term vision: fleets of
+autonomous robot-dog vendors that roam the beach and **self-resupply** at beachside bars
+and vendors, or at dedicated autonomous resupply stations.
 
 ## Tests
 
