@@ -212,24 +212,24 @@ def test_realtime_client_secret_uses_session_config(monkeypatch) -> None:
     assert response.json()["model"] == "gpt-realtime-2"
 
 
-def test_hello_defaults_to_gemini_speak_route() -> None:
+def test_hello_defaults_to_openai_speak_route() -> None:
     middleware = iphone_middleware.FetchIphoneMiddleware()
 
     with TestClient(middleware.server.app).websocket_connect("/fetch/ws") as ws:
         hello = ws.receive_json()
 
-    assert hello["tts_provider"] == "gemini"
+    assert hello["tts_provider"] == "openai"
     assert hello["audio_route"] == "speak"
     assert hello["realtime_enabled"] is False
 
 
-def test_cli_defaults_to_gemini_tts(monkeypatch) -> None:
+def test_cli_defaults_to_fast_openai_tts(monkeypatch) -> None:
     monkeypatch.setattr(sys, "argv", ["iphone_middleware"])
 
     args = iphone_middleware._parse_args()
 
-    assert args.tts_provider == "gemini"
-    assert args.tts_model == "gpt-4o-mini-tts"
+    assert args.tts_provider == "openai"
+    assert args.tts_model == "tts-1"
 
 
 def test_hello_conversation_enabled() -> None:

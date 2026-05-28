@@ -95,15 +95,16 @@ python -m dimos.experimental.fetch.iphone_middleware \
 
 Gemini defaults to `gemini-3.5-flash`; pass `--model` only to override it.
 `GOOGLE_API_KEY` is also accepted as a fallback for Gemini. Browser audio
-defaults to Gemini Live TTS; pass `--tts-provider openai` only to use OpenAI
+defaults to OpenAI TTS; pass `--tts-provider gemini` only to use Gemini Live
 TTS instead.
 
 ## Audio
 
 Browser speech uses `/speak` by default. The default `/speak` provider is
-Gemini Live TTS (`gemini-3.1-flash-live-preview`) and requires
-`GEMINI_API_KEY` or `GOOGLE_API_KEY`. With `--tts-provider openai`, `/speak`
-uses OpenAI TTS with `gpt-4o-mini-tts` by default and requires `OPENAI_API_KEY`.
+OpenAI TTS with `tts-1` for the lowest-latency speech path and requires
+`OPENAI_API_KEY`. With `--tts-provider gemini`, `/speak` uses Gemini Live TTS
+(`gemini-3.1-flash-live-preview`) and requires `GEMINI_API_KEY` or
+`GOOGLE_API_KEY`.
 
 OpenAI Realtime WebRTC is optional. Enable it explicitly with
 `--tts-provider openai --enable-realtime`; the browser will try Realtime first

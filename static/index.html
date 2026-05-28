@@ -663,8 +663,8 @@
         top: var(--space-md);
         left: var(--space-md);
         z-index: 4;
-        width: clamp(150px, 22%, 260px);
-        aspect-ratio: 1;
+        width: clamp(190px, 28%, 320px);
+        aspect-ratio: 4 / 3;
         border: 1px solid oklch(100% 0 0 / 0.18);
         border-radius: 8px;
         box-shadow:
@@ -2928,7 +2928,7 @@
           await speakOnce(line, "spoke cheese cue");
           await snapPhoto();
           await playPrintSound();
-          const doneLine = "Photo is done. You can pick it up from my head. I'll do a little dance now.";
+          const doneLine = "Got it. Your photo is printing on my head. Tiny victory dance, then I’m off.";
           els.line.textContent = doneLine;
           await speakOnce(doneLine, "spoke photo pickup cue");
           dance();

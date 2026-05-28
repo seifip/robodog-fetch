@@ -76,7 +76,7 @@ logger = setup_logger()
 STATIC_DIR = Path(__file__).parent / "static"
 CAPTURE_DIR = STATIC_DIR / "captures"
 DEFAULT_PORT = 8455
-DEFAULT_OPENAI_TTS_MODEL = "gpt-4o-mini-tts"
+DEFAULT_OPENAI_TTS_MODEL = "tts-1"
 GO2_LIDAR_STARTUP_TIMEOUT_S = 12.0
 GO2_LIDAR_STALE_TIMEOUT_S = 8.0
 CONVERSATION_IDLE_TIMEOUT_S = 30.0
@@ -148,17 +148,18 @@ def _go2_lidar_depth_hint(pointcloud: PointCloud2) -> dict[str, Any]:
     }
 
 
-def _go2_lidar_preview_jpeg(pointcloud: PointCloud2, size: int = 640) -> bytes:
+def _go2_lidar_preview_jpeg(pointcloud: PointCloud2, width: int = 640, height: int = 480) -> bytes:
     points, _ = pointcloud.as_numpy()
     points = np.asarray(points, dtype=np.float32)
-    image = np.zeros((size, size, 3), dtype=np.uint8)
+    image = np.zeros((height, width, 3), dtype=np.uint8)
     image[:] = (16, 24, 28)
+    robot_center = (width // 2, int(height * 0.66))
 
     for meters in range(1, 7):
         radius = int(meters * 42)
-        cv2.circle(image, (size // 2, int(size * 0.72)), radius, (42, 64, 68), 1)
-    cv2.line(image, (size // 2, 0), (size // 2, size), (38, 70, 76), 1)
-    cv2.line(image, (0, int(size * 0.72)), (size, int(size * 0.72)), (38, 70, 76), 1)
+        cv2.circle(image, robot_center, radius, (42, 64, 68), 1)
+    cv2.line(image, (robot_center[0], 0), (robot_center[0], height), (38, 70, 76), 1)
+    cv2.line(image, (0, robot_center[1]), (width, robot_center[1]), (38, 70, 76), 1)
 
     if points.ndim == 2 and points.shape[1] >= 3:
         points = points[:, :3]
@@ -176,9 +177,9 @@ def _go2_lidar_preview_jpeg(pointcloud: PointCloud2, size: int = 640) -> bytes:
                 distances = distances[::stride]
 
             scale = 42.0
-            px = np.rint((size / 2.0) + points[:, 0] * scale).astype(np.int32)
-            py = np.rint((size * 0.72) - points[:, 1] * scale).astype(np.int32)
-            inside = (px >= 0) & (px < size) & (py >= 0) & (py < size)
+            px = np.rint(robot_center[0] + points[:, 0] * scale).astype(np.int32)
+            py = np.rint(robot_center[1] - points[:, 1] * scale).astype(np.int32)
+            inside = (px >= 0) & (px < width) & (py >= 0) & (py < height)
             px = px[inside]
             py = py[inside]
             distances = distances[inside]
@@ -189,7 +190,6 @@ def _go2_lidar_preview_jpeg(pointcloud: PointCloud2, size: int = 640) -> bytes:
                 )
                 image[py, px] = colors[:, 0, :]
 
-    robot_center = (size // 2, int(size * 0.72))
     cv2.circle(image, robot_center, 9, (235, 245, 245), -1)
     cv2.circle(image, robot_center, 16, (80, 220, 220), 2)
     cv2.putText(image, "Go2 LiDAR", (18, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (230, 245, 245), 2)
@@ -561,7 +561,7 @@ class FetchIphoneMiddleware:
         port: int = DEFAULT_PORT,
         model: str | None = None,
         vision_provider: VisionProvider = "openai",
-        tts_provider: TtsProvider = "gemini",
+        tts_provider: TtsProvider = "openai",
         tts_model: str = DEFAULT_OPENAI_TTS_MODEL,
         tts_voice: str = "echo",
         enable_realtime: bool = False,
@@ -1212,8 +1212,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--tts-provider",
         choices=("openai", "gemini"),
-        default="gemini",
-        help="TTS provider. Gemini uses Live API for streaming voice.",
+        default="openai",
+        help="TTS provider. OpenAI uses the lowest-latency speech route by default.",
     )
     parser.add_argument("--tts-model", default=DEFAULT_OPENAI_TTS_MODEL, help="OpenAI TTS model.")
     parser.add_argument("--tts-voice", default="echo", help="TTS voice name (OpenAI or Gemini prebuilt).")
