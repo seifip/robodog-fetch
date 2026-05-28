@@ -182,8 +182,10 @@ Requirements and notes:
 
 - Requires `GEMINI_API_KEY` or `GOOGLE_API_KEY`. The conversation model defaults to
   `gemini-3.1-flash-live-preview`; override with `--conversation-model`.
-- The browser needs a secure context for microphone access, so run over HTTPS
-  (the default). `--no-ssl` disables the microphone.
+- The browser needs a secure context for microphone access. `http://localhost`
+  and `http://127.0.0.1` count as secure, so `--no-ssl` is fine for local desktop
+  testing, but the phone-over-LAN demo must use HTTPS (the default) or the browser
+  blocks the mic.
 - The WebSocket `hello` advertises `audio_route: "gemini_live_conversation"` and
   `conversation_enabled: true` so the browser knows to capture the mic. The
   conversation adds these `/fetch/ws` message types: browser → server
