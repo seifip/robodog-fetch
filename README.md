@@ -39,8 +39,9 @@ FastAPI + WebSocket server, so you can try the whole behavior from a phone brows
    what's actually visible in the scene — never on who the person is.
 5. **Makes the trade.** "Grab a Coke from my back, then pose for an instant photo."
    It coaches them to hold the Coke up and center themselves in frame.
-6. **Takes the shot.** When the framing is right, it snaps the photo, plays a
-   Polaroid print sound, tells them it's ready — and dances.
+6. **Takes the shot.** When the framing is right, it snaps the photo, shows it in a
+   Fetch-branded photo card with a Polaroid print sound, tells them it's ready —
+   and dances.
 
 Fetch's comedy voice is confessional, observational, self-deprecating, and mildly
 exasperated by the absurdity of being a tiny robot dog hauling soda around a beach.
@@ -81,9 +82,11 @@ motion / speech / photo decisions. Three camera sources plug into the same loop:
 python -m dimos.experimental.fetch.iphone_middleware --host 0.0.0.0 --port 8455
 ```
 
-Open `http://127.0.0.1:8455/fetch` and tap **Record** to start the ~1-second scan
-loop. (`localhost`/`127.0.0.1` are secure contexts, so HTTPS is optional there; a
-phone-over-LAN demo needs HTTPS — the default — or the browser blocks the camera/mic.)
+Open `https://127.0.0.1:8455/fetch` and tap **Record** to start the ~1-second scan
+loop (accept the self-signed-cert warning). For local debugging you can add `--no-ssl`
+and open `http://127.0.0.1:8455/fetch` instead — `localhost`/`127.0.0.1` count as
+secure contexts so the camera still works; a phone-over-LAN demo needs HTTPS (the
+default) or the browser blocks the camera/mic.
 
 **2. Real iPhone LiDAR depth via Record3D USB:**
 
@@ -102,8 +105,10 @@ python -m dimos.experimental.fetch.iphone_middleware \
 ```
 
 Vision defaults to OpenAI `gpt-5-mini`; `--vision-provider gemini` uses
-`gemini-3.5-flash` through Gemini's OpenAI-compatible API (no LangChain). Use
-`--no-ssl` for quick local debugging.
+`gemini-3.5-flash` through Gemini's OpenAI-compatible API (no LangChain). For the
+lowest latency, our live demo runs vision on **Gemini 2.5 Flash-Lite**
+(`--vision-provider gemini --model gemini-2.5-flash-lite`). Use `--no-ssl` for quick
+local debugging.
 
 ## Voice & conversation
 
@@ -191,7 +196,7 @@ person) and `confirm_coke` (check the person is holding the Coke and ready for a
 | `conversation_prompt.py` | Conversation persona, menu, and safety rules (mirrors `policy.py`). |
 | `record3d_source.py` | Background thread reading RGBD frames from Record3D USB; produces JPEG + depth hints. |
 | `tts.py` | TTS provider helpers: Gemini Live TTS, voice-name mapping, PCM→WAV conversion. |
-| `static/index.html` | Single-page phone UI: camera feed, previews, controls, decision display, audio routing, photo flow. |
+| `static/index.html` | Single-page phone UI: camera feed, previews, controls, decision display, audio routing, and the Fetch-branded photo result. |
 
 </details>
 
