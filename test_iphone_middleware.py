@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import ClassVar
@@ -558,13 +559,15 @@ def test_speak_uses_gemini_tts_without_openai_client(monkeypatch) -> None:
     assert response.headers["content-type"] == "audio/wav"
 
 
-def test_save_photo_writes_local_preview_icloud_and_google_drive(monkeypatch, tmp_path) -> None:
+def test_save_photo_writes_local_preview_and_configured_mirrors(monkeypatch, tmp_path) -> None:
     capture_dir = tmp_path / "captures"
-    icloud_dir = tmp_path / "iCloud Drive" / "fetch"
-    google_drive_dir = tmp_path / "Google Drive" / "robodog-fetch"
+    mirror_a = tmp_path / "iCloud Drive" / "fetch"
+    mirror_b = tmp_path / "Google Drive" / "robodog-fetch"
     monkeypatch.setattr(iphone_middleware, "CAPTURE_DIR", capture_dir)
-    monkeypatch.setattr(iphone_middleware, "ICLOUD_FETCH_DIR", icloud_dir)
-    monkeypatch.setattr(iphone_middleware, "GOOGLE_DRIVE_FETCH_DIR", google_drive_dir)
+    monkeypatch.setenv(
+        iphone_middleware.PHOTO_MIRROR_DIRS_ENV,
+        os.pathsep.join([str(mirror_a), str(mirror_b)]),
+    )
     image_bytes = b"fetch-photo"
     encoded = base64.b64encode(image_bytes).decode("ascii")
     middleware = iphone_middleware.FetchIphoneMiddleware()
@@ -579,8 +582,28 @@ def test_save_photo_writes_local_preview_icloud_and_google_drive(monkeypatch, tm
     assert payload["saved"] is True
     assert payload["url"].startswith("/fetch/static/captures/fetch-")
     assert Path(payload["path"]).read_bytes() == image_bytes
-    assert Path(payload["icloud_path"]).read_bytes() == image_bytes
-    assert Path(payload["google_drive_path"]).read_bytes() == image_bytes
     assert Path(payload["path"]).parent == capture_dir
-    assert Path(payload["icloud_path"]).parent == icloud_dir
-    assert Path(payload["google_drive_path"]).parent == google_drive_dir
+    mirror_paths = [Path(p) for p in payload["mirror_paths"]]
+    assert {p.parent for p in mirror_paths} == {mirror_a, mirror_b}
+    for mirror_path in mirror_paths:
+        assert mirror_path.read_bytes() == image_bytes
+
+
+def test_save_photo_without_mirrors_only_writes_local_preview(monkeypatch, tmp_path) -> None:
+    capture_dir = tmp_path / "captures"
+    monkeypatch.setattr(iphone_middleware, "CAPTURE_DIR", capture_dir)
+    monkeypatch.delenv(iphone_middleware.PHOTO_MIRROR_DIRS_ENV, raising=False)
+    image_bytes = b"fetch-photo"
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    middleware = iphone_middleware.FetchIphoneMiddleware()
+
+    response = TestClient(middleware.server.app).post(
+        "/photos/save",
+        json={"image_data_url": f"data:image/jpeg;base64,{encoded}"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["saved"] is True
+    assert payload["mirror_paths"] == []
+    assert Path(payload["path"]).read_bytes() == image_bytes
