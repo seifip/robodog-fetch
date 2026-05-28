@@ -16,9 +16,20 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import struct
+import uuid
 from typing import Literal
+
+logger = logging.getLogger("fetch.tts")
+
+# Lazily-created, reused Cartesia HTTP client (avoids a TLS handshake per call on
+# the latency-sensitive speech path). Cached per event loop and recreated if the
+# running loop changes or the client is closed, since an httpx.AsyncClient is
+# bound to the loop it was created on.
+_cartesia_client: object | None = None
+_cartesia_loop: object | None = None
 
 TtsProvider = Literal["openai", "gemini", "cartesia"]
 
@@ -65,11 +76,20 @@ def map_voice(voice: str, tts_provider: TtsProvider) -> str:
             return voice
         return VOICE_MAP_OPENAI_TO_GEMINI.get(voice, "Kore")
     if tts_provider == "cartesia":
-        # Pass through an explicit Cartesia voice id; otherwise map a shared name.
-        if "-" in voice and len(voice) >= 32:
+        # Pass through an explicit Cartesia voice id (a UUID); otherwise map a
+        # shared name, falling back to the default voice.
+        if _is_uuid(voice):
             return voice
         return VOICE_MAP_OPENAI_TO_CARTESIA.get(voice, DEFAULT_CARTESIA_VOICE)
     return voice
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(str(value))
+        return True
+    except ValueError:
+        return False
 
 
 def pcm_to_wav(
@@ -176,7 +196,15 @@ async def cartesia_tts(
     if not api_key:
         raise RuntimeError(f"{key_name} is not set")
 
+    import asyncio
+
     import httpx
+
+    global _cartesia_client, _cartesia_loop
+    loop = asyncio.get_running_loop()
+    if _cartesia_client is None or _cartesia_client.is_closed or _cartesia_loop is not loop:
+        _cartesia_client = httpx.AsyncClient(timeout=30)
+        _cartesia_loop = loop
 
     headers = {
         "X-API-Key": api_key,
@@ -193,12 +221,11 @@ async def cartesia_tts(
             "sample_rate": CARTESIA_SAMPLE_RATE,
         },
     }
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(
-            f"{CARTESIA_BASE_URL}/tts/bytes", headers=headers, json=body
-        )
+    response = await _cartesia_client.post(
+        f"{CARTESIA_BASE_URL}/tts/bytes", headers=headers, json=body
+    )
     if response.status_code != 200:
-        raise RuntimeError(
-            f"Cartesia TTS error {response.status_code}: {response.text[:200]}"
-        )
+        # Log the upstream body server-side; never surface it to the client.
+        logger.error("Cartesia TTS HTTP %s: %s", response.status_code, response.text[:500])
+        raise RuntimeError(f"Cartesia TTS failed (HTTP {response.status_code})")
     return response.content

@@ -15,9 +15,9 @@
 
 """Measure real round-trip latency of the models Fetch uses.
 
-This hits the live APIs, so it needs OPENAI_API_KEY and/or GEMINI_API_KEY
-(loaded from the repo .env, same as the server). Models with a missing key are
-skipped. Run from the repo root:
+This hits the live APIs, so it needs OPENAI_API_KEY, GEMINI_API_KEY (or
+GOOGLE_API_KEY), and/or CARTESIA_API_KEY (loaded from the repo .env, same as the
+server). Each provider whose key is missing is skipped. Run from the repo root:
 
     python3 scripts/latency_bench.py           # 3 runs each
     python3 scripts/latency_bench.py --runs 5
