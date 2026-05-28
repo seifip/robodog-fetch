@@ -24,6 +24,14 @@ where to move, what to say, and when to take the shot. It runs as a single
 FastAPI + WebSocket server, so you can try the whole behavior from a phone browser
 **before any robot is involved**.
 
+## The opportunity
+
+Fetch is an autonomous **brand ambassador** and **mobile vendor** — here for Coca-Cola
+— that hands out product, creates a memorable branded moment, and walks away with the
+guest's photo. The longer-term vision: fleets of autonomous robot-dog vendors that roam
+the beach and **self-resupply** at beachside bars and vendors, or at dedicated
+autonomous resupply stations.
+
 ## Why a beach?
 
 We started by brainstorming where a quadruped earns its keep, and kept landing on the
@@ -292,12 +300,6 @@ from the monorepo root.
   closing the interaction loop without relying on the camera's framing check.
 - **Take it to real sand.** Fit the Go2 with the sand-walking foot adaptations above for
   an outdoor beach deployment beyond the indoor / handheld-camera demo.
-
-**The bigger picture.** Fetch is an autonomous **brand ambassador** and **mobile
-vendor** — here for Coca-Cola — that hands out product, creates a memorable branded
-moment, and walks away with the guest's photo. The longer-term vision: fleets of
-autonomous robot-dog vendors that roam the beach and **self-resupply** at beachside bars
-and vendors, or at dedicated autonomous resupply stations.
 
 ## Tests
 
