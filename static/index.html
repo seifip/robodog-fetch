@@ -2464,6 +2464,8 @@
         audioMode: "",
         voice: "echo",
         liveModel: "gemini-3.1-flash-live-preview",
+        openaiAvailable: false,
+        geminiAvailable: false,
       };
 
       const REALTIME_CLIENT_SECRET_TIMEOUT_MS = 5000;
@@ -2788,6 +2790,8 @@
           state.audioRoute = message.audio_route || "speak";
           state.realtimeAvailable = Boolean(message.realtime_enabled);
           state.conversationEnabled = Boolean(message.conversation_enabled);
+          state.openaiAvailable = Boolean(message.openai_available);
+          state.geminiAvailable = Boolean(message.gemini_available);
           reconcileAudioMode();
           refreshAudioModal();
           if (state.audioRoute !== "realtime_then_speak") {
@@ -3271,26 +3275,42 @@
         } catch {}
       }
 
+      function audioModeAvailable(mode) {
+        // Live needs the conversation flag AND a Gemini key; each TTS route needs
+        // its own provider key. Availability comes from the hello message.
+        if (mode === "live") return state.conversationEnabled && state.geminiAvailable;
+        if (mode === "openai_tts") return state.openaiAvailable;
+        if (mode === "gemini_tts") return state.geminiAvailable;
+        return false;
+      }
+
+      function defaultAudioMode() {
+        if (state.conversationEnabled && state.geminiAvailable) return "live";
+        if (state.ttsProvider === "openai" && state.openaiAvailable) return "openai_tts";
+        if (state.ttsProvider === "gemini" && state.geminiAvailable) return "gemini_tts";
+        if (state.geminiAvailable) return "gemini_tts";
+        if (state.openaiAvailable) return "openai_tts";
+        return state.ttsProvider === "openai" ? "openai_tts" : "gemini_tts";
+      }
+
       function reconcileAudioMode() {
-        // Live needs the server launched with conversation mode; fall back to a
-        // TTS route otherwise, and pick a sensible default when none is stored.
-        const ttsDefault = state.ttsProvider === "openai" ? "openai_tts" : "gemini_tts";
-        if (state.audioMode === "live" && !state.conversationEnabled) {
-          state.audioMode = ttsDefault;
-        }
-        if (!state.audioMode) {
-          state.audioMode = state.conversationEnabled ? "live" : ttsDefault;
+        // Keep a stored choice if it still works; otherwise pick the best mode
+        // whose API key is actually present.
+        if (!AUDIO_MODES.includes(state.audioMode) || !audioModeAvailable(state.audioMode)) {
+          state.audioMode = defaultAudioMode();
         }
       }
 
       function refreshAudioModal() {
         if (!els.audioModal) return;
-        const liveRadio = els.audioModal.querySelector('input[value="live"]');
-        if (liveRadio) {
-          liveRadio.disabled = !state.conversationEnabled;
-          const label = liveRadio.closest("label");
-          if (label) label.classList.toggle("disabled", !state.conversationEnabled);
-        }
+        AUDIO_MODES.forEach((mode) => {
+          const radio = els.audioModal.querySelector(`input[value="${mode}"]`);
+          if (!radio) return;
+          const available = audioModeAvailable(mode);
+          radio.disabled = !available;
+          const label = radio.closest("label");
+          if (label) label.classList.toggle("disabled", !available);
+        });
         const modeRadio = els.audioModal.querySelector(
           `input[name="audioMode"][value="${state.audioMode}"]`,
         );
@@ -4213,7 +4233,12 @@
         }
       });
       loadAudioSettings();
-      reconcileAudioMode();
+      // Don't reconcile yet: provider availability is unknown until the hello
+      // message arrives, which reconciles against the real keys. Keep any stored
+      // choice (or a provisional default) so we don't clobber it prematurely.
+      if (!AUDIO_MODES.includes(state.audioMode)) {
+        state.audioMode = "gemini_tts";
+      }
       refreshAudioModal();
       setRunningUi(false);
       init();

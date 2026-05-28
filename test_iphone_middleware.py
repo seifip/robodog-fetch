@@ -345,6 +345,31 @@ def test_mic_chunk_forwarded_to_session() -> None:
     assert session.closed is True
 
 
+def test_hello_advertises_provider_availability(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
+    middleware = iphone_middleware.FetchIphoneMiddleware()
+
+    with TestClient(middleware.server.app).websocket_connect("/fetch/ws") as ws:
+        hello = ws.receive_json()
+
+    assert hello["openai_available"] is True
+    assert hello["gemini_available"] is True
+
+
+def test_hello_reports_missing_keys(monkeypatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("GOOGLE_API_KEY", "google-key")
+    middleware = iphone_middleware.FetchIphoneMiddleware()
+
+    with TestClient(middleware.server.app).websocket_connect("/fetch/ws") as ws:
+        hello = ws.receive_json()
+
+    assert hello["openai_available"] is False
+    assert hello["gemini_available"] is True  # GOOGLE_API_KEY counts as Gemini
+
+
 def test_conversation_start_forwards_voice_and_model() -> None:
     _FakeConversationSession.instances = []
     middleware = iphone_middleware.FetchIphoneMiddleware(conversation_mode="gemini_live")

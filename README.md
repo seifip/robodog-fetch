@@ -201,8 +201,12 @@ The phone UI has an **Audio** button (top right) that opens a settings modal for
 switching the audio path at runtime, without restarting the server:
 
 - **Modes**: Live conversation, Gemini TTS (one-way), or OpenAI TTS (one-way).
-  The Live option is only selectable when the server was launched with
-  `--conversation-mode gemini_live`; OpenAI TTS needs `OPENAI_API_KEY`.
+  Set **both** `OPENAI_API_KEY` and `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) in the
+  environment / `.env` to switch freely between all three. The server advertises
+  which keys are present (`openai_available` / `gemini_available` in the `hello`
+  message), and the modal disables any mode whose key is missing and defaults to
+  one that works. Live additionally requires launching with
+  `--conversation-mode gemini_live`.
 - **Voice**: a shared voice name (alloy/echo/fable/onyx/nova/shimmer) — Gemini
   routes map it to the matching prebuilt voice automatically.
 - **Live model**: the Gemini Live model used for conversation.

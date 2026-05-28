@@ -611,6 +611,14 @@ class FetchIphoneMiddleware:
             return "gemini_live_conversation"
         return "realtime_then_speak" if self.realtime_enabled else "speak"
 
+    def _provider_availability(self) -> dict[str, bool]:
+        """Which TTS/Live providers have an API key configured, so the browser
+        can enable only the audio modes that will actually work."""
+        return {
+            "openai_available": bool(os.getenv("OPENAI_API_KEY")),
+            "gemini_available": bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")),
+        }
+
     async def _robot_action_async(self, payload: dict[str, Any]) -> dict[str, Any]:
         if self._go2_source is None:
             return {"enabled": False, "ok": False, "message": "Robot IP is not configured"}
@@ -786,6 +794,7 @@ class FetchIphoneMiddleware:
                 "realtime_enabled": self.realtime_enabled,
                 "conversation_enabled": self.conversation_enabled,
                 "conversation_model": self.conversation_model,
+                **self._provider_availability(),
             }
 
         @self.server.app.post("/robot/preflight")
@@ -1115,6 +1124,7 @@ class FetchIphoneMiddleware:
                     "realtime_enabled": self.realtime_enabled,
                     "conversation_enabled": self.conversation_enabled,
                     "conversation_model": self.conversation_model,
+                    **self._provider_availability(),
                 }
             )
             logger.info("Fetch iPhone client connected")
