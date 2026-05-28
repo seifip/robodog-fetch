@@ -194,6 +194,24 @@ Requirements and notes:
 - If a conversation stalls for ~30 s, or the customer declines or walks away, the
   dog resets and resumes scanning.
 
+## Audio mode switcher
+
+The phone UI has an **Audio** button (top right) that opens a settings modal for
+switching the audio path at runtime, without restarting the server:
+
+- **Modes**: Live conversation, Gemini TTS (one-way), or OpenAI TTS (one-way).
+  The Live option is only selectable when the server was launched with
+  `--conversation-mode gemini_live`; OpenAI TTS needs `OPENAI_API_KEY`.
+- **Voice**: a shared voice name (alloy/echo/fable/onyx/nova/shimmer) — Gemini
+  routes map it to the matching prebuilt voice automatically.
+- **Live model**: the Gemini Live model used for conversation.
+
+The choice persists in `localStorage`. To have both TTS and Live available in the
+modal, launch with `--conversation-mode gemini_live` (the `/speak` TTS routes stay
+available alongside it). The modal sends the selected `provider`/`voice` with
+`/speak`, and `voice`/`model` with `conversation_start`. OpenAI Realtime is not in
+the modal — it remains a separate launch flag (`--enable-realtime`).
+
 ## WebSocket Frame
 
 ```json
