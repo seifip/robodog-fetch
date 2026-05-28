@@ -10,31 +10,31 @@ This package lives **inside the larger DimOS monorepo** at `dimos/experimental/f
 
 ```bash
 # From the DimOS monorepo root:
-python -m dimos.experimental.fetch.iphone_middleware --host 0.0.0.0 --port 8455
+python -m dimos.experimental.robodog_fetch.iphone_middleware --host 0.0.0.0 --port 8455
 
 # With Record3D USB RGBD input:
-python -m dimos.experimental.fetch.iphone_middleware --host 0.0.0.0 --port 8455 --record3d
+python -m dimos.experimental.robodog_fetch.iphone_middleware --host 0.0.0.0 --port 8455 --record3d
 
 # With a live Unitree Go2 robot:
-python -m dimos.experimental.fetch.iphone_middleware \
+python -m dimos.experimental.robodog_fetch.iphone_middleware \
   --host 0.0.0.0 --port 8455 \
   --vision-provider gemini \
   --robot-ip 192.168.12.1 --robot-connection-method local_ap
 
 # Disable HTTPS for local debugging:
-python -m dimos.experimental.fetch.iphone_middleware --host 0.0.0.0 --port 8455 --no-ssl
+python -m dimos.experimental.robodog_fetch.iphone_middleware --host 0.0.0.0 --port 8455 --no-ssl
 
 # Use Gemini vision instead of OpenAI:
 export GEMINI_API_KEY=<KEY>
-python -m dimos.experimental.fetch.iphone_middleware --host 0.0.0.0 --port 8455 --vision-provider gemini
+python -m dimos.experimental.robodog_fetch.iphone_middleware --host 0.0.0.0 --port 8455 --vision-provider gemini
 
 # Use Gemini Live TTS as the primary browser audio route:
 export GEMINI_API_KEY=<KEY>
-python -m dimos.experimental.fetch.iphone_middleware --host 0.0.0.0 --port 8455 --tts-voice Charon
+python -m dimos.experimental.robodog_fetch.iphone_middleware --host 0.0.0.0 --port 8455 --tts-voice Charon
 
 # Opt into OpenAI Realtime before /speak fallback:
 export OPENAI_API_KEY=<KEY>
-python -m dimos.experimental.fetch.iphone_middleware --host 0.0.0.0 --port 8455 --tts-provider openai --enable-realtime
+python -m dimos.experimental.robodog_fetch.iphone_middleware --host 0.0.0.0 --port 8455 --tts-provider openai --enable-realtime
 ```
 
 Open `http://127.0.0.1:8455/fetch` on the phone or browser.
@@ -98,7 +98,7 @@ Two **interaction phases** drive different prompts:
 
 ## Key Gotchas
 
-- **This is a standalone copy of a DimOS monorepo package.** The imports in `iphone_middleware.py` reference `dimos.experimental.fetch.*`, `dimos.robot.unitree.*`, `dimos.web.dimos_interface.*`, etc. Running standalone requires the DimOS monorepo on `PYTHONPATH`. The `test_policy.py` file imports `policy` directly (top-level) — it only works when run from this directory, not from the monorepo.
+- **This is a standalone copy of a DimOS monorepo package.** The imports in `iphone_middleware.py` reference `dimos.experimental.robodog_fetch.*`, `dimos.robot.unitree.*`, `dimos.web.dimos_interface.*`, etc. Running standalone requires the DimOS monorepo on `PYTHONPATH`. The `test_policy.py` file imports `policy` directly (top-level) — it only works when run from this directory, not from the monorepo.
 
 - **Gemini uses the OpenAI-compatible API.** Both providers go through `openai.OpenAI`. Gemini just gets `base_url="https://generativelanguage.googleapis.com/v1beta/openai/"`. The client class is always `openai.OpenAI`.
 
