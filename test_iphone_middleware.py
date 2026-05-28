@@ -73,7 +73,7 @@ def _setup_logger() -> SimpleNamespace:
 for package in [
     "dimos",
     "dimos.experimental",
-    "dimos.experimental.robodog_fetch",
+    "dimos.experimental.fetch",
     "dimos.msgs",
     "dimos.msgs.geometry_msgs",
     "dimos.msgs.sensor_msgs",
@@ -86,8 +86,8 @@ for package in [
 ]:
     _package(package)
 
-sys.modules["dimos.experimental.robodog_fetch.policy"] = policy
-sys.modules["dimos.experimental.robodog_fetch.tts"] = tts
+sys.modules["dimos.experimental.fetch.policy"] = policy
+sys.modules["dimos.experimental.fetch.tts"] = tts
 _module(
     "cv2",
     COLORMAP_TURBO=0,
@@ -99,7 +99,7 @@ _module(
     line=lambda *_args, **_kwargs: None,
     putText=lambda *_args, **_kwargs: None,
 )
-_module("dimos.experimental.robodog_fetch.record3d_source", Record3DSource=_Record3DSource)
+_module("dimos.experimental.fetch.record3d_source", Record3DSource=_Record3DSource)
 _module(
     "dimos.msgs.geometry_msgs.Twist",
     Twist=lambda **kwargs: SimpleNamespace(**kwargs),

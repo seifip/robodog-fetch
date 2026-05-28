@@ -25,21 +25,21 @@ objects nearby, or what is happening in the scene.
 
 ```bash
 cd /Users/seifip/GitHub/fetch/dimos
-python -m dimos.experimental.robodog_fetch.iphone_middleware --host 0.0.0.0 --port 8455
+python -m dimos.experimental.fetch.iphone_middleware --host 0.0.0.0 --port 8455
 ```
 
 For Record3D USB RGBD input:
 
 ```bash
 cd /Users/seifip/GitHub/fetch/dimos
-python -m dimos.experimental.robodog_fetch.iphone_middleware --host 0.0.0.0 --port 8455 --record3d
+python -m dimos.experimental.fetch.iphone_middleware --host 0.0.0.0 --port 8455 --record3d
 ```
 
 For a live Go2 on the dog Wi-Fi:
 
 ```bash
 cd /Users/seifip/GitHub/fetch/dimos
-python -m dimos.experimental.robodog_fetch.iphone_middleware \
+python -m dimos.experimental.fetch.iphone_middleware \
   --host 0.0.0.0 \
   --port 8455 \
   --vision-provider gemini \
@@ -87,7 +87,7 @@ OpenAI-compatible API, without LangChain:
 
 ```bash
 export GEMINI_API_KEY=<YOUR_KEY>
-python -m dimos.experimental.robodog_fetch.iphone_middleware \
+python -m dimos.experimental.fetch.iphone_middleware \
   --host 0.0.0.0 \
   --port 8455 \
   --vision-provider gemini
@@ -115,7 +115,7 @@ public network.
 
 ```bash
 export OPENAI_API_KEY=<YOUR_KEY>
-python -m dimos.experimental.robodog_fetch.iphone_middleware \
+python -m dimos.experimental.fetch.iphone_middleware \
   --host 0.0.0.0 \
   --port 8455 \
   --tts-provider openai \
@@ -129,7 +129,7 @@ For Gemini Live TTS as the primary browser audio route:
 
 ```bash
 export GEMINI_API_KEY=<YOUR_KEY>
-python -m dimos.experimental.robodog_fetch.iphone_middleware \
+python -m dimos.experimental.fetch.iphone_middleware \
   --host 0.0.0.0 \
   --port 8455 \
   --tts-voice Charon

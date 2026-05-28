@@ -34,7 +34,7 @@ import numpy as np
 from openai import OpenAI
 from unitree_webrtc_connect.constants import RTC_TOPIC
 
-from dimos.experimental.robodog_fetch.policy import (
+from dimos.experimental.fetch.policy import (
     DEFAULT_GEMINI_VISION_MODEL,
     DEFAULT_MAX_RETRIES,
     DEFAULT_OPENAI_VISION_MODEL,
@@ -43,9 +43,9 @@ from dimos.experimental.robodog_fetch.policy import (
     FetchPolicyConfig,
     VisionProvider,
 )
-from dimos.experimental.robodog_fetch.record3d_source import Record3DSource
+from dimos.experimental.fetch.record3d_source import Record3DSource
 try:
-    from dimos.experimental.robodog_fetch.tts import (
+    from dimos.experimental.fetch.tts import (
         TtsProvider,
         gemini_live_tts,
         map_voice,
