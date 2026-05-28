@@ -560,7 +560,7 @@ def _jsonable_openai_response(response: Any) -> dict[str, Any]:
 
 def _photo_mirror_dirs() -> list[Path]:
     raw = os.environ.get(PHOTO_MIRROR_DIRS_ENV, "")
-    return [Path(part).expanduser() for part in raw.split(os.pathsep) if part.strip()]
+    return [Path(part.strip()).expanduser() for part in raw.split(os.pathsep) if part.strip()]
 
 
 def _save_fetch_photo(image_bytes: bytes, filename: str) -> tuple[Path, list[Path]]:

@@ -81,9 +81,11 @@ motion / speech / photo decisions. Three camera sources plug into the same loop:
 python -m dimos.experimental.fetch.iphone_middleware --host 0.0.0.0 --port 8455
 ```
 
-Open `http://127.0.0.1:8455/fetch` and tap **Record** to start the ~1-second scan
-loop. (`localhost`/`127.0.0.1` are secure contexts, so HTTPS is optional there; a
-phone-over-LAN demo needs HTTPS — the default — or the browser blocks the camera/mic.)
+Open `https://127.0.0.1:8455/fetch` and tap **Record** to start the ~1-second scan
+loop (accept the self-signed-cert warning). For local debugging you can add `--no-ssl`
+and open `http://127.0.0.1:8455/fetch` instead — `localhost`/`127.0.0.1` count as
+secure contexts so the camera still works; a phone-over-LAN demo needs HTTPS (the
+default) or the browser blocks the camera/mic.
 
 **2. Real iPhone LiDAR depth via Record3D USB:**
 
