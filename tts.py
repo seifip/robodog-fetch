@@ -16,14 +16,41 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import struct
+import uuid
 from typing import Literal
 
-TtsProvider = Literal["openai", "gemini"]
+logger = logging.getLogger("fetch.tts")
+
+# Lazily-created, reused Cartesia HTTP client (avoids a TLS handshake per call on
+# the latency-sensitive speech path). Cached per event loop and recreated if the
+# running loop changes or the client is closed, since an httpx.AsyncClient is
+# bound to the loop it was created on.
+_cartesia_client: object | None = None
+_cartesia_loop: object | None = None
+
+TtsProvider = Literal["openai", "gemini", "cartesia"]
 
 DEFAULT_GEMINI_TTS_MODEL = "gemini-3.1-flash-live-preview"
 GEMINI_TTS_SAMPLE_RATE = 24000
+
+DEFAULT_CARTESIA_TTS_MODEL = "sonic-3.5-2026-05-04"
+CARTESIA_BASE_URL = "https://api.cartesia.ai"
+CARTESIA_VERSION = "2026-03-01"
+CARTESIA_SAMPLE_RATE = 24000
+# Cartesia's recommended stable agent voice (Jameson); used as the default.
+DEFAULT_CARTESIA_VOICE = "a5136bf9-224c-4d76-b823-52bd5efcffcc"
+# Map the shared voice names to Cartesia voice ids (recommended/stable voices).
+VOICE_MAP_OPENAI_TO_CARTESIA: dict[str, str] = {
+    "alloy": "f786b574-daa5-4673-aa0c-cbe3e8534c02",   # Katie
+    "echo": "a5136bf9-224c-4d76-b823-52bd5efcffcc",    # Jameson
+    "fable": "db6b0ed5-d5d3-463d-ae85-518a07d3c2b4",   # Skylar
+    "onyx": "630ed21c-2c5c-41cf-9d82-10a7fd668370",    # Corey
+    "nova": "62ae83ad-4f6a-430b-af41-a9bede9286ca",    # Gemma
+    "shimmer": "f786b574-daa5-4673-aa0c-cbe3e8534c02", # Katie
+}
 
 VOICE_MAP_OPENAI_TO_GEMINI: dict[str, str] = {
     "alloy": "Kore",
@@ -48,7 +75,21 @@ def map_voice(voice: str, tts_provider: TtsProvider) -> str:
         if voice in GEMINI_PREBUILT_VOICES:
             return voice
         return VOICE_MAP_OPENAI_TO_GEMINI.get(voice, "Kore")
+    if tts_provider == "cartesia":
+        # Pass through an explicit Cartesia voice id (a UUID); otherwise map a
+        # shared name, falling back to the default voice.
+        if _is_uuid(voice):
+            return voice
+        return VOICE_MAP_OPENAI_TO_CARTESIA.get(voice, DEFAULT_CARTESIA_VOICE)
     return voice
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(str(value))
+        return True
+    except ValueError:
+        return False
 
 
 def pcm_to_wav(
@@ -82,6 +123,10 @@ def _gemini_api_key() -> tuple[str, str | None]:
         "GEMINI_API_KEY or GOOGLE_API_KEY",
         os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"),
     )
+
+
+def _cartesia_api_key() -> tuple[str, str | None]:
+    return ("CARTESIA_API_KEY", os.getenv("CARTESIA_API_KEY"))
 
 
 async def gemini_live_tts(text: str, voice: str = "Kore") -> bytes:
@@ -139,3 +184,48 @@ async def gemini_live_tts(text: str, voice: str = "Kore") -> bytes:
         raise RuntimeError("Gemini Live TTS returned no audio data")
 
     return pcm_to_wav(b"".join(pcm_chunks))
+
+
+async def cartesia_tts(
+    text: str,
+    voice: str = DEFAULT_CARTESIA_VOICE,
+    model: str = DEFAULT_CARTESIA_TTS_MODEL,
+) -> bytes:
+    """Synthesize speech with Cartesia Sonic and return WAV bytes."""
+    key_name, api_key = _cartesia_api_key()
+    if not api_key:
+        raise RuntimeError(f"{key_name} is not set")
+
+    import asyncio
+
+    import httpx
+
+    global _cartesia_client, _cartesia_loop
+    loop = asyncio.get_running_loop()
+    if _cartesia_client is None or _cartesia_client.is_closed or _cartesia_loop is not loop:
+        _cartesia_client = httpx.AsyncClient(timeout=30)
+        _cartesia_loop = loop
+
+    headers = {
+        "X-API-Key": api_key,
+        "Cartesia-Version": CARTESIA_VERSION,
+        "Content-Type": "application/json",
+    }
+    body = {
+        "model_id": model,
+        "transcript": text,
+        "voice": {"mode": "id", "id": voice},
+        "output_format": {
+            "container": "wav",
+            "encoding": "pcm_s16le",
+            "sample_rate": CARTESIA_SAMPLE_RATE,
+        },
+    }
+    response = await _cartesia_client.post(
+        f"{CARTESIA_BASE_URL}/tts/bytes", headers=headers, json=body
+    )
+    if response.status_code != 200:
+        # Log the upstream body server-side; never surface it to the client.
+        logger.error("Cartesia TTS HTTP %s: %s", response.status_code, response.text[:500])
+        raise RuntimeError(f"Cartesia TTS failed (HTTP {response.status_code})")
+    return response.content

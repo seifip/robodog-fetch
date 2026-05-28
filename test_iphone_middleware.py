@@ -412,6 +412,32 @@ def test_speak_provider_override_to_openai(monkeypatch) -> None:
     assert openai_client.audio.speech.create.call_args.kwargs["voice"] == "nova"
 
 
+def test_speak_cartesia_provider(monkeypatch) -> None:
+    monkeypatch.setenv("CARTESIA_API_KEY", "cartesia-key")
+    middleware = iphone_middleware.FetchIphoneMiddleware(tts_voice="echo")
+    cartesia = AsyncMock(return_value=b"RIFFwav")
+
+    with patch("iphone_middleware.cartesia_tts", new=cartesia):
+        response = TestClient(middleware.server.app).post(
+            "/speak", json={"text": "hi", "provider": "cartesia"}
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/wav"
+    assert response.content == b"RIFFwav"
+    cartesia.assert_awaited_once_with("hi", voice=tts.map_voice("echo", "cartesia"))
+
+
+def test_hello_advertises_cartesia_availability(monkeypatch) -> None:
+    monkeypatch.setenv("CARTESIA_API_KEY", "cartesia-key")
+    middleware = iphone_middleware.FetchIphoneMiddleware()
+
+    with TestClient(middleware.server.app).websocket_connect("/fetch/ws") as ws:
+        hello = ws.receive_json()
+
+    assert hello["cartesia_available"] is True
+
+
 def test_speak_provider_override_to_gemini(monkeypatch) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
     middleware = iphone_middleware.FetchIphoneMiddleware(tts_provider="openai", tts_voice="echo")
