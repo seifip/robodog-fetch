@@ -222,8 +222,13 @@ class LiveConversationSession:
         future = self._pending_photo_results.pop(request_id, None)
         if future is None or future.done():
             return
+        ok = event.get("ok")
+        if not isinstance(ok, bool):
+            ok = data.get("ok")
+        if not isinstance(ok, bool):
+            ok = False
         result = {
-            "ok": bool(event.get("ok", data.get("ok", False))),
+            "ok": ok,
             "url": str(event.get("url") or data.get("url") or ""),
             "error": str(event.get("error") or data.get("error") or ""),
         }

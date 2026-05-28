@@ -163,6 +163,32 @@ def test_take_photo_waits_for_browser_success() -> None:
     assert finish is False
 
 
+def test_take_photo_rejects_string_ok_from_browser() -> None:
+    session, emitted, _robot = _make_session()
+
+    async def scenario():
+        task = asyncio.create_task(session._dispatch_tool("take_photo", {}))
+        await asyncio.sleep(0)
+        request = next(m for m in emitted if m.get("state") == "take_photo")
+        request_id = request["data"]["request_id"]
+        session.push_browser_event(
+            {
+                "event": "photo_result",
+                "request_id": request_id,
+                "ok": "false",
+                "error": "capture failed",
+            }
+        )
+        return await task
+
+    result, scheduling, finish = _run(scenario())
+
+    assert result["photo_taken"] is False
+    assert result["error"] == "capture failed"
+    assert scheduling == "WHEN_IDLE"
+    assert finish is False
+
+
 def test_take_photo_returns_failure_on_browser_timeout() -> None:
     session, emitted, _robot = _make_session()
     with patch("conversation.PHOTO_RESULT_TIMEOUT_S", 0.01):

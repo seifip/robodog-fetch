@@ -3110,7 +3110,8 @@
           return fallback;
         }
         const lower = cleaned.toLowerCase();
-        if (lower.includes("coke") && lower.includes("back")) {
+        const hasPhotoStep = lower.includes("photo") || lower.includes("picture");
+        if (lower.includes("coke") && lower.includes("back") && hasPhotoStep) {
           return cleaned;
         }
         const combined = `${fallback} ${cleaned}`;
