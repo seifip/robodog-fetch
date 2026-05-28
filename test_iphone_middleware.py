@@ -292,6 +292,7 @@ class _FakeConversationSession:
         self.opened = False
         self.closed = False
         self.mic: list[bytes] = []
+        self.browser_events: list[dict] = []
         self.finished = False
         self._run = asyncio.Event()
         _FakeConversationSession.instances.append(self)
@@ -308,6 +309,9 @@ class _FakeConversationSession:
 
     def push_mic(self, pcm: bytes) -> None:
         self.mic.append(pcm)
+
+    def push_browser_event(self, event: dict) -> None:
+        self.browser_events.append(event)
 
 
 def test_conversation_start_opens_session() -> None:
@@ -344,6 +348,34 @@ def test_mic_chunk_forwarded_to_session() -> None:
     session = _FakeConversationSession.instances[0]
     assert session.mic == [b"hello"]
     assert session.closed is True
+
+
+def test_conversation_event_forwarded_to_session() -> None:
+    _FakeConversationSession.instances = []
+    middleware = iphone_middleware.FetchIphoneMiddleware(conversation_mode="gemini_live")
+
+    with patch("iphone_middleware.LiveConversationSession", _FakeConversationSession):
+        with TestClient(middleware.server.app).websocket_connect("/fetch/ws") as ws:
+            ws.receive_json()  # hello
+            ws.send_json({"type": "conversation_start", "context": ""})
+            ws.receive_json()  # conversation_state active
+            ws.send_json({
+                "type": "conversation_event",
+                "event": "photo_result",
+                "request_id": "photo-1",
+                "ok": True,
+            })
+            ws.send_json({"type": "conversation_stop"})
+
+    session = _FakeConversationSession.instances[0]
+    assert session.browser_events == [
+        {
+            "type": "conversation_event",
+            "event": "photo_result",
+            "request_id": "photo-1",
+            "ok": True,
+        }
+    ]
 
 
 def test_hello_advertises_provider_availability(monkeypatch) -> None:

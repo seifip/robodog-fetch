@@ -154,7 +154,7 @@ photo-coaching lines.
 
 By default Fetch only *speaks* (one-way TTS). With `--conversation-mode gemini_live`
 the dog instead holds a real two-way voice conversation once it reaches a person:
-it tells a joke, **takes a drink order**, coaches the photo, takes the picture, and
+it tells a joke, confirms the one-Coke-for-photo bit, coaches the photo, takes the picture, and
 celebrates — all driven by a persistent Gemini Live session with tool calling.
 
 ```bash
@@ -178,8 +178,8 @@ How it works:
   (`conversation.py`) per interaction and streams the dog's voice (24 kHz PCM) back
   for playback. Turn-taking uses the Live API's server-side voice activity
   detection, and talking over the dog triggers barge-in.
-- The model drives the dog through **tool calls**: `take_order` (records quantity —
-  Coke only; the customer grabs a can from the dog's back), `take_photo`,
+- The model drives the dog through **tool calls**: `accept_offer` (one Coke from
+  the dog's back), `take_photo` (waits for the browser capture result),
   `celebrate` (goodbye + dance), `do_trick`, and `stop_and_reset`. There is no
   mechanical dispenser.
 - Photo framing reuses the existing vision `confirm_coke` policy: framing results
@@ -200,8 +200,8 @@ Requirements and notes:
 - The WebSocket `hello` advertises `audio_route: "gemini_live_conversation"` and
   `conversation_enabled: true` so the browser knows to capture the mic. The
   conversation adds these `/fetch/ws` message types: browser → server
-  `conversation_start`, `mic_chunk`, `conversation_stop`; server → browser
-  `audio_out`, `transcript`, `interrupted`, `conversation_state`.
+  `conversation_start`, `mic_chunk`, `conversation_event`, `conversation_stop`;
+  server → browser `audio_out`, `transcript`, `interrupted`, `conversation_state`.
 - If a conversation stalls for ~30 s, or the customer declines or walks away, the
   dog resets and resumes scanning.
 
@@ -209,6 +209,10 @@ Requirements and notes:
 
 The phone UI has an **Audio** button (top right) that opens a settings modal for
 switching the audio path at runtime, without restarting the server:
+
+The header also has a **Direct/Staged** approach toggle. Direct preserves the
+fast happy-path greet; Staged inserts a short settle/stand beat before Fetch
+waves and starts the Coke handoff.
 
 - **Modes**: Live conversation, Gemini TTS (one-way), OpenAI TTS (one-way), or
   Cartesia TTS (one-way, Cartesia Sonic — lowest latency). Set the relevant keys

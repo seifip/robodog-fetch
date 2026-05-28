@@ -429,6 +429,11 @@
         color: oklch(91% 0.035 30);
       }
 
+      .approach-toggle {
+        min-width: 92px;
+        min-height: 42px;
+      }
+
       .record-toggle::before {
         display: inline-block;
         width: 10px;
@@ -2159,6 +2164,7 @@
       }
 
       .header-metrics .status,
+      .header-metrics .approach-toggle,
       .header-metrics .record-toggle,
       .header-metrics button.bp5-button.record-toggle {
         box-shadow: none !important;
@@ -2181,7 +2187,7 @@
 
         .header-metrics {
           display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
+          grid-template-columns: repeat(3, minmax(0, 1fr));
           width: 100%;
         }
 
@@ -2464,6 +2470,7 @@
       </div>
       <div class="header-metrics" aria-label="Recording controls">
         <button id="audioSettings" class="bp5-button" type="button">Audio</button>
+        <button id="approachToggle" class="bp5-button approach-toggle" type="button" aria-pressed="false">Direct</button>
         <button id="recordToggle" class="bp5-button record-toggle" data-running="false">Record</button>
       </div>
     </header>
@@ -2544,7 +2551,7 @@
               <input type="radio" name="audioMode" value="live" />
               <span class="audio-mode-body">
                 <span class="audio-mode-name">Live conversation</span>
-                <span class="audio-mode-desc">Two-way voice: jokes, takes the order, photo</span>
+                <span class="audio-mode-desc">Two-way voice: joke, Coke handoff, photo</span>
               </span>
               <span class="audio-status" data-mode-status="live" data-ready="true">Ready</span>
             </label>
@@ -2610,6 +2617,7 @@
     <script>
       const els = {
         recordToggle: document.getElementById("recordToggle"),
+        approachToggle: document.getElementById("approachToggle"),
         audioSettings: document.getElementById("audioSettings"),
         audioModal: document.getElementById("audioModal"),
         audioVoice: document.getElementById("audioVoice"),
@@ -2642,6 +2650,7 @@
         stream: null,
         scanning: false,
         workflow: "find_guest",
+        approachMode: "direct",
         visionSource: "browser",
         pendingFrame: false,
         speaking: false,
@@ -2703,6 +2712,41 @@
       function setStatus(text) {
         state.transportStatus = text;
         renderStatus();
+      }
+
+      function refreshApproachToggle() {
+        if (!els.approachToggle) {
+          return;
+        }
+        const staged = state.approachMode === "staged";
+        els.approachToggle.textContent = staged ? "Staged" : "Direct";
+        els.approachToggle.setAttribute("aria-pressed", String(staged));
+        els.approachToggle.title = staged
+          ? "Pause, settle, then greet."
+          : "Use the current direct greet flow.";
+      }
+
+      function loadDemoSettings() {
+        try {
+          const approachMode = localStorage.getItem("fetch.approachMode");
+          if (approachMode === "direct" || approachMode === "staged") {
+            state.approachMode = approachMode;
+          }
+        } catch {}
+        refreshApproachToggle();
+      }
+
+      function persistDemoSettings() {
+        try {
+          localStorage.setItem("fetch.approachMode", state.approachMode);
+        } catch {}
+      }
+
+      function toggleApproachMode() {
+        state.approachMode = state.approachMode === "staged" ? "direct" : "staged";
+        persistDemoSettings();
+        refreshApproachToggle();
+        log(`approach mode ${state.approachMode}`);
       }
 
       function setStatusPill(label, stateKey) {
@@ -3059,6 +3103,96 @@
         }
       }
 
+      function oneCokeOfferLine(line) {
+        const fallback = "I’ll hold still. Grab one Coke from my back, then hold it up for your instant photo.";
+        const cleaned = String(line || "").trim();
+        if (!cleaned) {
+          return fallback;
+        }
+        const lower = cleaned.toLowerCase();
+        if (lower.includes("coke") && lower.includes("back")) {
+          return cleaned;
+        }
+        const combined = `${fallback} ${cleaned}`;
+        if (combined.length <= 230) {
+          return combined;
+        }
+        return `${combined.slice(0, 227).replace(/\s+\S*$/, "").replace(/[,.!?;:]$/, "")}.`;
+      }
+
+      async function runStagedApproachBeat() {
+        if (state.approachMode !== "staged") {
+          return;
+        }
+        els.motion.textContent = "settle";
+        els.line.textContent = "I’m stopping here so the handoff is easy.";
+        await robotAction({ action: "stand" });
+        await sleep(850);
+      }
+
+      async function presentHandoffPose({ line, speakLine = false, useRobot = true } = {}) {
+        const poseLine = line || "I’ll hold still. Grab one Coke from my back, then hold it up for the photo.";
+        els.motion.textContent = "present";
+        els.line.textContent = poseLine;
+        if (useRobot) {
+          await robotAction({ action: "stand" });
+        }
+        await sleep(250);
+        if (speakLine) {
+          await speakOnce(poseLine, "presented Coke handoff");
+        }
+      }
+
+      async function speakWithConversationMicMuted(text, successLog) {
+        const oldSuppress = state.echoSuppress;
+        const oldGate = state.echoGate;
+        if (state.conversationActive) {
+          state.echoSuppress = true;
+          state.echoGate = true;
+        }
+        try {
+          await speakOnce(text, successLog);
+        } finally {
+          state.echoSuppress = oldSuppress;
+          state.echoGate = oldGate;
+        }
+      }
+
+      async function runPhotoSequence({ cue, doneLine, doneLog } = {}) {
+        const now = Date.now();
+        if (now - state.lastPhotoAt < 8000 || state.photoInProgress) {
+          return { ok: false, error: "photo already in progress" };
+        }
+        state.lastPhotoAt = now;
+        state.photoInProgress = true;
+        try {
+          const cueLine = cue || "Three, two, one, cheers.";
+          els.line.textContent = cueLine;
+          await speakWithConversationMicMuted(cueLine, "spoke photo cue");
+          const saved = await snapPhoto();
+          await playPrintSound();
+          if (doneLine) {
+            els.line.textContent = doneLine;
+            await speakWithConversationMicMuted(doneLine, doneLog || "spoke photo done line");
+          }
+          return { ok: true, url: saved && saved.url ? saved.url : "" };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "photo failed";
+          log(`photo ${message}`);
+          return { ok: false, error: message };
+        } finally {
+          state.photoInProgress = false;
+        }
+      }
+
+      function sendConversationEvent(payload) {
+        if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+          log("conversation event dropped; socket closed");
+          return;
+        }
+        state.ws.send(JSON.stringify({ type: "conversation_event", ...payload }));
+      }
+
       async function beginOffer(message) {
         const now = Date.now();
         if (now - state.lastGreetAt < 12000 || state.speaking) {
@@ -3066,6 +3200,7 @@
         }
         state.lastGreetAt = now;
         state.lastLine = message.line;
+        await runStagedApproachBeat();
         els.motion.textContent = "wave";
         await robotAction({ action: "wave" });
         if (state.audioMode === "live" && state.conversationEnabled) {
@@ -3073,7 +3208,7 @@
           if (state.micStream) {
             state.conversationActive = true;
             state.lastConvFrameAt = Date.now();
-            setWorkflow("confirm_coke", "Live conversation: taking the order and photo.");
+            setWorkflow("confirm_coke", "Live conversation: one Coke for a photo.");
             if (state.ws && state.ws.readyState === WebSocket.OPEN) {
               state.ws.send(JSON.stringify({
                 type: "conversation_start",
@@ -3088,37 +3223,28 @@
           log("mic unavailable; using scripted offer");
         }
         log("wave and Coke-for-photo offer");
-        await speakOnce(message.line, "spoke joke and offer");
+        await presentHandoffPose();
+        await speakOnce(oneCokeOfferLine(message.line), "spoke Coke-for-photo offer");
         setWorkflow("confirm_coke", "Hold that Coke up for me. I’m lining up the shot.");
       }
 
       async function completePhoto(message) {
-        const now = Date.now();
-        if (now - state.lastPhotoAt < 10000 || state.photoInProgress) {
+        const result = await runPhotoSequence({
+          cue: "Three, two, one, cheers.",
+          doneLine: "Got it. Your photo is ready. Tiny victory dance, then I’m off.",
+          doneLog: "spoke photo pickup cue",
+        });
+        if (!result.ok) {
           return;
         }
-        state.lastPhotoAt = now;
-        state.photoInProgress = true;
-        try {
-          const line = message.line || "Hold the Coke up front and center. Cheers.";
-          els.line.textContent = line;
-          await speakOnce(line, "spoke cheese cue");
-          await snapPhoto();
-          await playPrintSound();
-          const doneLine = "Got it. Your photo is ready. Tiny victory dance, then I’m off.";
-          els.line.textContent = doneLine;
-          await speakOnce(doneLine, "spoke photo pickup cue");
-          dance();
-          await robotAction({ action: "dance" });
-          log("photo saved; dance triggered");
-          await sleep(2500);
-          const byeLine = "Thanks for hanging out. Bye.";
-          els.line.textContent = byeLine;
-          await speakOnce(byeLine, "spoke goodbye");
-          setWorkflow("find_guest", "Photo printed. I’m sniffing out the next Coke/photo star.");
-        } finally {
-          state.photoInProgress = false;
-        }
+        dance();
+        await robotAction({ action: "dance" });
+        log("photo saved; dance triggered");
+        await sleep(2500);
+        const byeLine = "Thanks for hanging out. Bye.";
+        els.line.textContent = byeLine;
+        await speakOnce(byeLine, "spoke goodbye");
+        setWorkflow("find_guest", "Photo printed. I’m sniffing out the next Coke/photo star.");
       }
 
       async function speakOnce(text, successLog) {
@@ -3720,23 +3846,24 @@
           const url = `${saved.url}?ts=${Date.now()}`;
           await showPhotoResult(url);
           log(`dog photo saved ${saved.icloud_path || saved.path || ""}`);
-          return;
+          return { ...saved, url };
         }
         if (state.visionSource === "record3d") {
           const saved = await savePhoto({ source: "record3d" });
           const url = `${saved.url}?ts=${Date.now()}`;
           await showPhotoResult(url);
           log(`record3d photo saved ${saved.icloud_path || saved.path || ""}`);
-          return;
+          return { ...saved, url };
         }
         if (!els.video.videoWidth) {
-          return;
+          throw new Error("camera frame unavailable");
         }
         const dataUrl = captureDataUrl(1024);
         const saved = await savePhoto({ image_data_url: dataUrl });
         const url = `${saved.url}?ts=${Date.now()}`;
         await showPhotoResult(url);
         log(`photo saved ${saved.icloud_path || saved.path || ""}`);
+        return { ...saved, url };
       }
 
       function dance() {
@@ -4005,29 +4132,39 @@
 
       async function handleConversationState(message) {
         const conversationState = message.state;
+        const data = message.data || {};
         if (conversationState === "active") {
           log("conversation active");
           return;
         }
+        if (conversationState === "present_handoff") {
+          await presentHandoffPose({
+            line: data.line,
+            speakLine: false,
+            useRobot: false,
+          });
+          return;
+        }
         if (conversationState === "take_photo") {
-          const now = Date.now();
-          if (now - state.lastPhotoAt < 8000 || state.photoInProgress) {
-            return;
-          }
-          state.lastPhotoAt = now;
-          state.photoInProgress = true;
-          try {
-            await snapPhoto();
-            await playPrintSound();
+          const result = await runPhotoSequence({
+            cue: data.cue || "Three, two, one, cheers.",
+          });
+          if (result.ok) {
             log("conversation photo saved");
-          } catch (err) {
-            log(`photo ${err.message}`);
-          } finally {
-            state.photoInProgress = false;
           }
+          sendConversationEvent({
+            event: "photo_result",
+            request_id: data.request_id || "",
+            ok: result.ok,
+            url: result.url || "",
+            error: result.error || "",
+          });
           return;
         }
         if (conversationState === "celebrate") {
+          const goodbyeLine = data.goodbye_line || "Thanks for hanging out. Bye.";
+          els.line.textContent = goodbyeLine;
+          await speakWithConversationMicMuted(goodbyeLine, "spoke goodbye");
           dance();
           log("conversation celebrate");
           endConversation(false);
@@ -4468,6 +4605,7 @@
       }
 
       els.recordToggle.addEventListener("click", toggleAutomation);
+      els.approachToggle.addEventListener("click", toggleApproachMode);
       window.addEventListener("beforeunload", closeRealtimeVoiceSession);
       els.photoPreview.addEventListener("error", () => {
         els.photoPreview.removeAttribute("src");
@@ -4486,6 +4624,7 @@
         }
       });
       loadAudioSettings();
+      loadDemoSettings();
       // Don't reconcile yet: provider availability is unknown until the hello
       // message arrives, which reconciles against the real keys. Keep any stored
       // choice (or a provisional default) so we don't clobber it prematurely.

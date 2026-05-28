@@ -1182,6 +1182,11 @@ class FetchIphoneMiddleware:
                     if message_type == "conversation_stop":
                         await self._stop_conversation()
                         continue
+                    if message_type == "conversation_event":
+                        session = self._conv_session
+                        if session is not None and not session.finished:
+                            session.push_browser_event(message)
+                        continue
                     if message_type == "mic_chunk":
                         session = self._conv_session
                         if session is not None and not session.finished:

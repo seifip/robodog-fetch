@@ -58,6 +58,7 @@ DEFAULT_IDLE_TIMEOUT_S = 30.0
 SILENCE_NUDGE_S = 8.0
 FRAMING_INJECT_MIN_INTERVAL_S = 2.0
 MIC_QUEUE_MAXSIZE = 256
+PHOTO_RESULT_TIMEOUT_S = 20.0
 
 EmitCallable = Callable[[dict[str, Any]], Awaitable[None]]
 RobotActionCallable = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -100,6 +101,8 @@ class LiveConversationSession:
         self._last_framing_key: tuple[str, str] | None = None
         self._last_framing_at = 0.0
         self._terminal_emitted = False
+        self._photo_request_seq = 0
+        self._pending_photo_results: dict[str, asyncio.Future[dict[str, Any]]] = {}
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -166,6 +169,10 @@ class LiveConversationSession:
                 await self._cm.__aexit__(None, None, None)
             except Exception:  # pragma: no cover - SDK teardown best effort
                 logger.exception("conversation session close failed")
+        for future in list(self._pending_photo_results.values()):
+            if not future.done():
+                future.set_result({"ok": False, "error": "conversation closed"})
+        self._pending_photo_results.clear()
         self._cm = None
         self._session = None
 
@@ -203,6 +210,32 @@ class LiveConversationSession:
         self._last_framing_key = key
         self._last_framing_at = now
         asyncio.create_task(self._inject_text(f"[FRAMING] {hint}"))
+
+    def push_browser_event(self, event: dict[str, Any]) -> None:
+        """Resolve browser-side action results for tool calls waiting on UI work."""
+        if str(event.get("event") or "") != "photo_result":
+            return
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        request_id = str(event.get("request_id") or data.get("request_id") or "")
+        if not request_id:
+            return
+        future = self._pending_photo_results.pop(request_id, None)
+        if future is None or future.done():
+            return
+        result = {
+            "ok": bool(event.get("ok", data.get("ok", False))),
+            "url": str(event.get("url") or data.get("url") or ""),
+            "error": str(event.get("error") or data.get("error") or ""),
+        }
+
+        def settle() -> None:
+            if not future.done():
+                future.set_result(result)
+
+        if self._loop is not None and self._loop.is_running():
+            self._loop.call_soon_threadsafe(settle)
+        else:
+            settle()
 
     # -- internal loops ------------------------------------------------------
 
@@ -344,26 +377,41 @@ class LiveConversationSession:
         """Returns (response, scheduling, finish). ``finish`` is applied by the
         caller only after the tool response is sent, so the terminal response is
         never dropped by an early session shutdown."""
-        if name == "take_order":
-            quantity = _coerce_int(args.get("quantity"), default=1, low=1, high=4)
-            noun = "Coke" if quantity == 1 else "Cokes"
+        if name in {"accept_offer", "take_order"}:
+            await self._emit(
+                {
+                    "type": "conversation_state",
+                    "state": "present_handoff",
+                    "data": {
+                        "line": (
+                            "I'll hold still. Grab one Coke from my back, then "
+                            "hold it up front for the photo."
+                        ),
+                    },
+                }
+            )
+            robot = await self._robot_action({"action": "stand"})
             return (
                 {
+                    "offer_accepted": True,
                     "order_recorded": True,
-                    "quantity": quantity,
+                    "quantity": 1,
                     "instructions": (
-                        f"Tell them to reach back and grab {quantity} ice-cold "
-                        f"{noun} from the pouch on your back."
+                        "Tell them you will hold still, then tell them to grab "
+                        "one ice-cold Coke from the pouch on your back and hold "
+                        "it up front for the photo."
                     ),
+                    "robot_state": robot,
                 },
                 "WHEN_IDLE",
                 False,
             )
 
         if name == "take_photo":
-            await self._emit({"type": "conversation_state", "state": "take_photo", "data": {}})
+            cue = str(args.get("cue") or "Three, two, one, cheers.").strip()
+            result = await self._request_photo(cue)
             return (
-                {"photo_taken": True, "ts": datetime.now().isoformat(timespec="seconds")},
+                result,
                 "WHEN_IDLE",
                 False,
             )
@@ -399,6 +447,46 @@ class LiveConversationSession:
         except Exception as exc:
             logger.exception("robot action failed during conversation")
             return {"enabled": True, "ok": False, "message": str(exc)}
+
+    async def _request_photo(self, cue: str) -> dict[str, Any]:
+        loop = self._loop or asyncio.get_running_loop()
+        self._loop = loop
+        self._photo_request_seq += 1
+        request_id = f"photo-{self._photo_request_seq}"
+        future: asyncio.Future[dict[str, Any]] = loop.create_future()
+        self._pending_photo_results[request_id] = future
+        await self._emit(
+            {
+                "type": "conversation_state",
+                "state": "take_photo",
+                "data": {
+                    "request_id": request_id,
+                    "cue": cue,
+                },
+            }
+        )
+        try:
+            result = await asyncio.wait_for(future, timeout=PHOTO_RESULT_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            self._pending_photo_results.pop(request_id, None)
+            return {
+                "photo_taken": False,
+                "request_id": request_id,
+                "error": "browser photo timed out",
+            }
+
+        if result.get("ok"):
+            return {
+                "photo_taken": True,
+                "request_id": request_id,
+                "url": str(result.get("url") or ""),
+                "ts": datetime.now().isoformat(timespec="seconds"),
+            }
+        return {
+            "photo_taken": False,
+            "request_id": request_id,
+            "error": str(result.get("error") or "browser photo failed"),
+        }
 
     def _function_response(self, call_id: Any, name: str, result: dict[str, Any], scheduling: str | None) -> Any:
         types = self._types

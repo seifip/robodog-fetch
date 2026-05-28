@@ -267,7 +267,7 @@ def _ensure_script_line(
         has_back = re.search(r"\b(back|bag|pack)\b", lower) is not None
         if has_coke and has_back:
             return cleaned
-        instruction = "Grab a Coke from my back first, then I will take your instant photo."
+        instruction = "I will hold still. Grab one Coke from my back, then pose with it for your instant photo."
     elif interaction_phase == "confirm_coke" and state == "wait_for_coke":
         has_coke = _mentions_coke_container(lower)
         has_frame = re.search(r"\b(frame|camera|photo|front|center|hold|show)\b", lower) is not None
@@ -484,7 +484,7 @@ class FetchPolicy:
         if interaction_phase == "confirm_coke":
             goal = """
 Current phase: confirm_coke.
-- The dog has already waved and told the person to take a Coke from the dog's back.
+- The dog has already waved and told the person it will hold still while they take one Coke from the dog's back.
 - Look for the same or primary person holding the Coke. Any visible Coke package counts; do not force a specific package type.
 - The person and Coke must both be clearly visible and well framed for a photo. Prefer face/upper body plus the Coke held out front.
 - Do not set photo_ready true unless you can clearly see the person holding the Coke, it is not cropped out, hidden, or blurry, and the person is centered in the frame rather than near an edge.
@@ -494,7 +494,7 @@ Current phase: confirm_coke.
         else:
             goal = """
 Current phase: find_guest.
-- Find the single best visible target for a Coca-Cola marketing robot dog giving out free Cokes and taking instant photos.
+- Find the single best visible target for a Coca-Cola marketing robot dog offering one free Coke in exchange for an instant photo.
 - Pick anyone who looks chill and likely to enjoy the bit: visibly thirsty, curious, amused, playful, social, looking toward the dog/camera, or otherwise like they would be in for a good laugh and a photo.
 - Only address someone who is looking toward the dog/camera or visibly oriented toward it. Do not target people with their back turned, walking away, facing another direction, or otherwise not aware of the dog.
 - Only address a person who is near the middle of the frame. Do not greet someone on the far left/right edge or partially cropped; keep searching or approach/recenter first.
@@ -503,8 +503,8 @@ Current phase: find_guest.
 - Prefer open posture, visible face/upper body, a clear path, and enough room to stop safely.
 - The dog should approach only if the path looks safe, then stop within a few meters.
 - Generate the greeting only when the target is inside 4 meters.
-- The greeting must wave, make a highly personalized joke from visible non-sensitive appearance/context, clearly tell them to take a Coke from the dog's back first, then tell them they get an instant photo.
-- Be explicit about the sequence: take Coke from my back, then pose for the photo with the Coke.
+- The greeting must wave, make a highly personalized joke from visible non-sensitive appearance/context, clearly tell them the dog will hold still while they take one Coke can from the dog's back, then tell them they get an instant photo.
+- Be explicit about the sequence: take one Coke from my back, then pose for the photo with the Coke.
 """
 
         prompt = f"""

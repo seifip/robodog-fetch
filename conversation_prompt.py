@@ -36,20 +36,20 @@ def build_system_instruction() -> str:
         "turn to one or two sentences unless you are delivering a joke.\n"
         "\n"
         "MENU AND MECHANICS:\n"
-        "- You sell exactly one product: ice-cold Cokes. There are no other "
-        "options. All Cokes are free promotional samples today; do not mention "
-        "prices unless asked.\n"
-        "- You carry the Cokes in a pouch on your back. When someone orders, tell "
-        "them to reach over and grab their Coke(s) from your back. You do NOT "
+        "- You offer exactly one product: one ice-cold Coke can. There are no "
+        "other options. The Coke is a free promotional sample today; do not "
+        "mention prices unless asked.\n"
+        "- You carry the can in a pouch on your back. When someone accepts, tell "
+        "them to reach over and grab one Coke from your back. You do NOT "
         "dispense anything mechanically.\n"
         "\n"
         "INTERACTION FLOW (follow in order):\n"
         "1. Open with a short, personalized joke based on the visible context "
         "you are given.\n"
-        "2. Offer a Coke and ask how many they want, one to four. When they "
-        "answer, call take_order.\n"
-        "3. Confirm the order out loud and tell them to grab the Coke from "
-        "your back.\n"
+        "2. Offer one Coke in exchange for a photo. If they accept, call "
+        "accept_offer.\n"
+        "3. Confirm out loud that you will hold still, then tell them to grab "
+        "one Coke from your back.\n"
         "4. Coach them for the photo using the [FRAMING] hints you receive (you "
         "cannot see them yourself). Tell them to hold the Coke up and center "
         "themselves. Keep coaching until the hint explicitly says the person is "
@@ -58,7 +58,7 @@ def build_system_instruction() -> str:
         "photo.\n"
         "5. Only when a [FRAMING] hint explicitly says the shot is ready with "
         "the person clearly holding the Coke and centered in frame, call "
-        "take_photo and say a quick photographer cue like 'cheese'.\n"
+        "take_photo and provide a quick photographer cue like 'three, two, one, cheers'.\n"
         "6. Finish by calling celebrate with a short, funny goodbye line.\n"
         "If the customer declines or walks away, call stop_and_reset.\n"
         "\n"
@@ -91,19 +91,12 @@ def build_tools(types: Any) -> Any:
     return types.Tool(
         function_declarations=[
             types.FunctionDeclaration(
-                name="take_order",
+                name="accept_offer",
                 description=(
-                    "Record the customer's Coke order. Call this once the "
-                    "customer says how many Cokes they want."
+                    "Record that the customer accepted the one-Coke-for-photo "
+                    "offer and present the back pouch for handoff."
                 ),
-                parameters=schema(
-                    type=kind.OBJECT,
-                    properties={
-                        "quantity": schema(type=kind.INTEGER, description="Number of Cokes, 1 to 4."),
-                        "confirmed": schema(type=kind.BOOLEAN, description="True once the customer confirmed."),
-                    },
-                    required=["quantity"],
-                ),
+                parameters=schema(type=kind.OBJECT, properties={}),
             ),
             types.FunctionDeclaration(
                 name="take_photo",
@@ -112,7 +105,15 @@ def build_tools(types: Any) -> Any:
                     "this when a [FRAMING] hint says the person is clearly "
                     "holding the Coke and the shot is ready."
                 ),
-                parameters=schema(type=kind.OBJECT, properties={}),
+                parameters=schema(
+                    type=kind.OBJECT,
+                    properties={
+                        "cue": schema(
+                            type=kind.STRING,
+                            description="Short photographer cue for the browser to speak before capture.",
+                        ),
+                    },
+                ),
             ),
             types.FunctionDeclaration(
                 name="do_trick",

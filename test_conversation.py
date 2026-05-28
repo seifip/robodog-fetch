@@ -117,35 +117,62 @@ def _toolcall_msg(name, args, call_id):
 # -- tool dispatch -----------------------------------------------------------
 
 
-def test_take_order_clamps_quantity_and_skips_hardware() -> None:
-    session, _emitted, robot = _make_session()
-    result, scheduling, finish = _run(session._dispatch_tool("take_order", {"quantity": 9}))
+def test_accept_offer_presents_handoff_and_invokes_robot() -> None:
+    session, emitted, robot = _make_session()
+    result, scheduling, finish = _run(session._dispatch_tool("accept_offer", {}))
 
-    assert result["order_recorded"] is True
-    assert result["quantity"] == 4
-    assert "back" in result["instructions"]
+    assert result["offer_accepted"] is True
+    assert result["quantity"] == 1
+    assert "one ice-cold Coke" in result["instructions"]
     assert scheduling == "WHEN_IDLE"
     assert finish is False
-    assert robot == []
+    assert robot == [{"action": "stand"}]
+    assert any(m.get("state") == "present_handoff" for m in emitted)
 
 
-def test_take_order_defaults_to_one() -> None:
+def test_take_order_alias_uses_one_coke_story() -> None:
     session, _emitted, _robot = _make_session()
-    result, _, _ = _run(session._dispatch_tool("take_order", {"quantity": "not a number"}))
+    result, _, _ = _run(session._dispatch_tool("take_order", {"quantity": 9}))
     assert result["quantity"] == 1
 
 
-def test_take_photo_emits_conversation_state() -> None:
+def test_take_photo_waits_for_browser_success() -> None:
     session, emitted, _robot = _make_session()
-    result, scheduling, finish = _run(session._dispatch_tool("take_photo", {}))
+
+    async def scenario():
+        task = asyncio.create_task(session._dispatch_tool("take_photo", {"cue": "cheers"}))
+        await asyncio.sleep(0)
+        request = next(m for m in emitted if m.get("state") == "take_photo")
+        request_id = request["data"]["request_id"]
+        assert request["data"]["cue"] == "cheers"
+        session.push_browser_event(
+            {
+                "event": "photo_result",
+                "request_id": request_id,
+                "ok": True,
+                "url": "/fetch/static/captures/test.jpg",
+            }
+        )
+        return await task
+
+    result, scheduling, finish = _run(scenario())
 
     assert result["photo_taken"] is True
+    assert result["url"] == "/fetch/static/captures/test.jpg"
     assert scheduling == "WHEN_IDLE"
     assert finish is False
-    assert any(
-        m.get("type") == "conversation_state" and m.get("state") == "take_photo"
-        for m in emitted
-    )
+
+
+def test_take_photo_returns_failure_on_browser_timeout() -> None:
+    session, emitted, _robot = _make_session()
+    with patch("conversation.PHOTO_RESULT_TIMEOUT_S", 0.01):
+        result, scheduling, finish = _run(session._dispatch_tool("take_photo", {}))
+
+    assert result["photo_taken"] is False
+    assert "timed out" in result["error"]
+    assert scheduling == "WHEN_IDLE"
+    assert finish is False
+    assert any(m.get("state") == "take_photo" for m in emitted)
 
 
 def test_do_trick_invokes_robot() -> None:
@@ -243,7 +270,7 @@ def test_recv_loop_routes_audio_transcript_interrupt_and_tools() -> None:
         _transcript_msg("dog", "ice cold Coke coming up"),
         _transcript_msg("user", "two please"),
         _interrupt_msg(),
-        _toolcall_msg("take_order", {"quantity": 2}, "c1"),
+        _toolcall_msg("accept_offer", {}, "c1"),
     ])
     session._session = mock
 
@@ -257,8 +284,8 @@ def test_recv_loop_routes_audio_transcript_interrupt_and_tools() -> None:
 
     assert mock.tool_responses
     response = mock.tool_responses[0]["function_responses"][0]
-    assert response["name"] == "take_order"
-    assert response["response"]["quantity"] == 2
+    assert response["name"] == "accept_offer"
+    assert response["response"]["quantity"] == 1
     assert response["scheduling"] == "WHEN_IDLE"
 
 
@@ -278,7 +305,7 @@ def test_handle_tool_calls_retries_without_scheduling() -> None:
 
     picky = _PickySession()
     session._session = picky
-    call = SimpleNamespace(id="c1", name="take_order", args={"quantity": 2})
+    call = SimpleNamespace(id="c1", name="accept_offer", args={})
 
     _run(session._handle_tool_calls([call]))
 
@@ -287,7 +314,7 @@ def test_handle_tool_calls_retries_without_scheduling() -> None:
     second = picky.calls[1]["function_responses"][0]
     assert "scheduling" in first
     assert "scheduling" not in second
-    assert second["response"]["quantity"] == 2
+    assert second["response"]["quantity"] == 1
 
 
 # -- framing injection -------------------------------------------------------
