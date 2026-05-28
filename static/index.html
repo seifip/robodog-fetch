@@ -2209,6 +2209,63 @@
           transition-duration: 0.01ms !important;
         }
       }
+      .audio-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .audio-modal[hidden] {
+        display: none;
+      }
+      .audio-modal-backdrop {
+        position: absolute;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.55);
+      }
+      .audio-modal-card {
+        position: relative;
+        width: min(420px, 92vw);
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        padding: 20px;
+      }
+      .audio-modal-title {
+        margin: 0;
+      }
+      .audio-modes {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 6px;
+        padding: 10px 12px;
+      }
+      .audio-modes label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .audio-modes label.disabled {
+        opacity: 0.45;
+      }
+      .audio-field {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .audio-field select {
+        padding: 6px 8px;
+        border-radius: 6px;
+      }
+      .audio-modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
     </style>
   </head>
   <body>
@@ -2217,6 +2274,7 @@
         <img class="brand-logo" src="/fetch/static/logo.png" alt="Fetch" />
       </div>
       <div class="header-metrics" aria-label="Recording controls">
+        <button id="audioSettings" class="bp5-button" type="button">Audio</button>
         <button id="recordToggle" class="bp5-button record-toggle" data-running="false">Record</button>
       </div>
     </header>
@@ -2286,6 +2344,39 @@
       </aside>
     </main>
 
+    <div id="audioModal" class="audio-modal" hidden>
+      <div class="audio-modal-backdrop" data-close="1"></div>
+      <div class="audio-modal-card bp5-card">
+        <h3 class="audio-modal-title">Audio settings</h3>
+        <fieldset class="audio-modes">
+          <legend>Mode</legend>
+          <label><input type="radio" name="audioMode" value="live" /> Live conversation</label>
+          <label><input type="radio" name="audioMode" value="gemini_tts" /> Gemini TTS (one-way)</label>
+          <label><input type="radio" name="audioMode" value="openai_tts" /> OpenAI TTS (needs OPENAI_API_KEY)</label>
+        </fieldset>
+        <label class="audio-field">Voice
+          <select id="audioVoice">
+            <option value="alloy">alloy</option>
+            <option value="echo">echo</option>
+            <option value="fable">fable</option>
+            <option value="onyx">onyx</option>
+            <option value="nova">nova</option>
+            <option value="shimmer">shimmer</option>
+          </select>
+        </label>
+        <label class="audio-field">Live model
+          <select id="audioLiveModel">
+            <option value="gemini-3.1-flash-live-preview">gemini-3.1-flash-live-preview</option>
+            <option value="gemini-2.5-flash-native-audio-preview-12-2025">gemini-2.5-flash-native-audio</option>
+          </select>
+        </label>
+        <div class="audio-modal-actions">
+          <button id="audioCancel" class="bp5-button" type="button" data-close="1">Cancel</button>
+          <button id="audioSave" class="bp5-button bp5-intent-primary" type="button">Save</button>
+        </div>
+      </div>
+    </div>
+
     <canvas id="canvas" hidden></canvas>
     <audio id="audio" playsinline></audio>
     <audio id="printAudio" preload="auto" playsinline src="/fetch/static/audio/freesound_community-polaroid_600-83252.mp3"></audio>
@@ -2293,6 +2384,11 @@
     <script>
       const els = {
         recordToggle: document.getElementById("recordToggle"),
+        audioSettings: document.getElementById("audioSettings"),
+        audioModal: document.getElementById("audioModal"),
+        audioVoice: document.getElementById("audioVoice"),
+        audioLiveModel: document.getElementById("audioLiveModel"),
+        audioSave: document.getElementById("audioSave"),
         video: document.getElementById("video"),
         canvas: document.getElementById("canvas"),
         frameRate: document.getElementById("frameRate"),
@@ -2365,12 +2461,16 @@
         echoGate: false,
         echoSuppress: false,
         lastConvFrameAt: 0,
+        audioMode: "",
+        voice: "echo",
+        liveModel: "gemini-3.1-flash-live-preview",
       };
 
       const REALTIME_CLIENT_SECRET_TIMEOUT_MS = 5000;
       const REALTIME_SDP_TIMEOUT_MS = 8000;
       const MIC_TARGET_RATE = 16000;
       const CONV_FRAME_INTERVAL_MS = 2500;
+      const AUDIO_MODES = ["live", "gemini_tts", "openai_tts"];
 
       function setStatus(text) {
         state.transportStatus = text;
@@ -2688,10 +2788,12 @@
           state.audioRoute = message.audio_route || "speak";
           state.realtimeAvailable = Boolean(message.realtime_enabled);
           state.conversationEnabled = Boolean(message.conversation_enabled);
+          reconcileAudioMode();
+          refreshAudioModal();
           if (state.audioRoute !== "realtime_then_speak") {
             closeRealtimeVoiceSession();
           }
-          log(`vision ${message.vision_provider || "openai"} ${message.model}; audio ${state.audioRoute}`);
+          log(`vision ${message.vision_provider || "openai"} ${message.model}; audio ${state.audioRoute}; mode ${state.audioMode}`);
           return;
         }
         if (message.type === "audio_out") {
@@ -2789,14 +2891,19 @@
         state.lastLine = message.line;
         els.motion.textContent = "wave";
         await robotAction({ action: "wave" });
-        if (state.conversationEnabled) {
+        if (state.audioMode === "live" && state.conversationEnabled) {
           await startMic();
           if (state.micStream) {
             state.conversationActive = true;
             state.lastConvFrameAt = Date.now();
             setWorkflow("confirm_bottle", "Live conversation: taking the order and photo.");
             if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-              state.ws.send(JSON.stringify({ type: "conversation_start", context: message.line }));
+              state.ws.send(JSON.stringify({
+                type: "conversation_start",
+                context: message.line,
+                voice: state.voice,
+                model: state.liveModel,
+              }));
             }
             log("live conversation started");
             return;
@@ -3135,6 +3242,89 @@
         );
       }
 
+      function ttsProviderFor(mode) {
+        return mode === "openai_tts" ? "openai" : "gemini";
+      }
+
+      function audioModeLabel(mode) {
+        if (mode === "live") return "Live";
+        if (mode === "openai_tts") return "OpenAI TTS";
+        return "Gemini TTS";
+      }
+
+      function loadAudioSettings() {
+        try {
+          const mode = localStorage.getItem("fetch.audioMode");
+          const voice = localStorage.getItem("fetch.voice");
+          const liveModel = localStorage.getItem("fetch.liveModel");
+          if (mode && AUDIO_MODES.includes(mode)) state.audioMode = mode;
+          if (voice) state.voice = voice;
+          if (liveModel) state.liveModel = liveModel;
+        } catch {}
+      }
+
+      function persistAudioSettings() {
+        try {
+          localStorage.setItem("fetch.audioMode", state.audioMode);
+          localStorage.setItem("fetch.voice", state.voice);
+          localStorage.setItem("fetch.liveModel", state.liveModel);
+        } catch {}
+      }
+
+      function reconcileAudioMode() {
+        // Live needs the server launched with conversation mode; fall back to a
+        // TTS route otherwise, and pick a sensible default when none is stored.
+        const ttsDefault = state.ttsProvider === "openai" ? "openai_tts" : "gemini_tts";
+        if (state.audioMode === "live" && !state.conversationEnabled) {
+          state.audioMode = ttsDefault;
+        }
+        if (!state.audioMode) {
+          state.audioMode = state.conversationEnabled ? "live" : ttsDefault;
+        }
+      }
+
+      function refreshAudioModal() {
+        if (!els.audioModal) return;
+        const liveRadio = els.audioModal.querySelector('input[value="live"]');
+        if (liveRadio) {
+          liveRadio.disabled = !state.conversationEnabled;
+          const label = liveRadio.closest("label");
+          if (label) label.classList.toggle("disabled", !state.conversationEnabled);
+        }
+        const modeRadio = els.audioModal.querySelector(
+          `input[name="audioMode"][value="${state.audioMode}"]`,
+        );
+        if (modeRadio) modeRadio.checked = true;
+        if (els.audioVoice) els.audioVoice.value = state.voice;
+        if (els.audioLiveModel) els.audioLiveModel.value = state.liveModel;
+        if (els.audioSettings) els.audioSettings.textContent = `Audio: ${audioModeLabel(state.audioMode)}`;
+      }
+
+      function openAudioModal() {
+        refreshAudioModal();
+        els.audioModal.hidden = false;
+      }
+
+      function closeAudioModal() {
+        els.audioModal.hidden = true;
+      }
+
+      function saveAudioSettings() {
+        const checked = els.audioModal.querySelector('input[name="audioMode"]:checked');
+        const wasLive = state.audioMode === "live";
+        if (checked && AUDIO_MODES.includes(checked.value)) state.audioMode = checked.value;
+        if (els.audioVoice) state.voice = els.audioVoice.value;
+        if (els.audioLiveModel) state.liveModel = els.audioLiveModel.value;
+        reconcileAudioMode();
+        persistAudioSettings();
+        if (wasLive && state.audioMode !== "live" && state.conversationActive) {
+          endConversation(true);
+        }
+        refreshAudioModal();
+        closeAudioModal();
+        log(`audio mode ${audioModeLabel(state.audioMode)}, voice ${state.voice}`);
+      }
+
       async function speak(text = els.line.textContent) {
         if (!text) {
           return;
@@ -3153,7 +3343,11 @@
           response = await fetch("/speak", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text }),
+            body: JSON.stringify({
+              text,
+              voice: state.voice,
+              provider: ttsProviderFor(state.audioMode),
+            }),
           });
         } catch (err) {
           log(`speech ${err.message}; using browser voice`);
@@ -4011,6 +4205,16 @@
         els.downloadLink.hidden = true;
         log("photo unavailable");
       });
+      els.audioSettings.addEventListener("click", openAudioModal);
+      els.audioSave.addEventListener("click", saveAudioSettings);
+      els.audioModal.addEventListener("click", (event) => {
+        if (event.target.dataset && event.target.dataset.close) {
+          closeAudioModal();
+        }
+      });
+      loadAudioSettings();
+      reconcileAudioMode();
+      refreshAudioModal();
       setRunningUi(false);
       init();
     </script>
