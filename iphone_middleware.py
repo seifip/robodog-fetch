@@ -219,7 +219,6 @@ class Go2Source:
         self._lidar_frames_received = 0
         self._last_error: str | None = None
         self._lidar_last_error: str | None = None
-        self._last_action_at: float | None = None
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -303,8 +302,6 @@ class Go2Source:
         return self._with_connection(run)
 
     def action(self, payload: dict[str, Any]) -> dict[str, Any]:
-        with self._lock:
-            self._last_action_at = time.time()
         action = str(payload.get("action") or "").strip()
 
         def run(conn: UnitreeWebRTCConnection) -> dict[str, Any]:
@@ -349,26 +346,14 @@ class Go2Source:
                 )
                 logger.info("Connected to Go2 WebRTC camera/control")
 
-                while not self._stop_event.wait(timeout=0.1):
+                while not self._stop_event.wait(timeout=0.5):
                     now = time.time()
                     with self._lock:
                         conn_missing = self._conn is None
                         lidar_frames = self._lidar_frames_received
                         latest_lidar_at = self._latest_lidar_at
-                        last_action_at = self._last_action_at
                     if conn_missing:
                         break
-
-                    # Watchdog: If no action received for > 0.5s, force stop
-                    if last_action_at is not None and now - last_action_at > 0.5:
-                        with self._lock:
-                            self._last_action_at = None  # Prevent spamming
-                        logger.warning("Watchdog triggered: No recent actions, stopping robot.")
-                        conn.move(
-                            Twist(linear=Vector3(0.0, 0.0, 0.0), angular=Vector3(0.0, 0.0, 0.0)),
-                            duration=0.1
-                        )
-
                     if (
                         lidar_frames == starting_lidar_frames
                         and now - connected_at > GO2_LIDAR_STARTUP_TIMEOUT_S
