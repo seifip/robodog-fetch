@@ -62,6 +62,16 @@ def test_map_voice_gemini_unknown_defaults_to_kore() -> None:
     assert tts.map_voice("unknown_voice", "gemini") == "Kore"
 
 
+def test_map_voice_cartesia_maps_shared_names() -> None:
+    assert tts.map_voice("echo", "cartesia") == tts.VOICE_MAP_OPENAI_TO_CARTESIA["echo"]
+    assert tts.map_voice("unknown_voice", "cartesia") == tts.DEFAULT_CARTESIA_VOICE
+
+
+def test_map_voice_cartesia_passes_through_voice_id() -> None:
+    voice_id = "a5136bf9-224c-4d76-b823-52bd5efcffcc"
+    assert tts.map_voice(voice_id, "cartesia") == voice_id
+
+
 def test_pcm_to_wav_header_structure() -> None:
     pcm = b"\x00\x00" * 100
     wav = tts.pcm_to_wav(pcm)

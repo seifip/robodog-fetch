@@ -48,6 +48,7 @@ try:
     from dimos.experimental.fetch.tts import (
         DEFAULT_GEMINI_TTS_MODEL,
         TtsProvider,
+        cartesia_tts,
         gemini_live_tts,
         map_voice,
     )
@@ -55,6 +56,7 @@ except ModuleNotFoundError:
     from tts import (  # type: ignore[no-redef]
         DEFAULT_GEMINI_TTS_MODEL,
         TtsProvider,
+        cartesia_tts,
         gemini_live_tts,
         map_voice,
     )
@@ -489,7 +491,7 @@ class Go2Source:
 DEFAULT_REALTIME_MODEL = "gpt-realtime-2"
 DEFAULT_REALTIME_REASONING_EFFORT = "low"
 REALTIME_REASONING_EFFORTS = ("minimal", "low", "medium", "high", "xhigh")
-TTS_PROVIDERS = ("openai", "gemini")
+TTS_PROVIDERS = ("openai", "gemini", "cartesia")
 
 
 def _validate_tts_provider(value: str) -> TtsProvider:
@@ -628,6 +630,7 @@ class FetchIphoneMiddleware:
         return {
             "openai_available": bool(os.getenv("OPENAI_API_KEY")),
             "gemini_available": bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")),
+            "cartesia_available": bool(os.getenv("CARTESIA_API_KEY")),
         }
 
     async def _robot_action_async(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1060,6 +1063,17 @@ class FetchIphoneMiddleware:
                     )
                 return Response(content=wav_bytes, media_type="audio/wav")
 
+            if provider == "cartesia":
+                try:
+                    wav_bytes = await cartesia_tts(text, voice=map_voice(voice, "cartesia"))
+                except Exception as exc:
+                    logger.exception("Cartesia TTS failed")
+                    return JSONResponse(
+                        {"error": f"Cartesia TTS error: {exc}"},
+                        status_code=503,
+                    )
+                return Response(content=wav_bytes, media_type="audio/wav")
+
             openai_client = self._get_openai_client()
             if openai_client is None:
                 return JSONResponse(
@@ -1231,7 +1245,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--tts-provider",
-        choices=("openai", "gemini"),
+        choices=("openai", "gemini", "cartesia"),
         default="openai",
         help="TTS provider. OpenAI uses the lowest-latency speech route by default.",
     )

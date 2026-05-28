@@ -108,7 +108,9 @@ Browser speech uses `/speak` by default. The default `/speak` provider is
 OpenAI TTS with `tts-1` for the lowest-latency speech path and requires
 `OPENAI_API_KEY`. With `--tts-provider gemini`, `/speak` uses Gemini Live TTS
 (`gemini-3.1-flash-live-preview`) and requires `GEMINI_API_KEY` or
-`GOOGLE_API_KEY`.
+`GOOGLE_API_KEY`. With `--tts-provider cartesia`, `/speak` uses Cartesia Sonic
+(`sonic-3.5-2026-05-04`) and requires `CARTESIA_API_KEY`. `/speak` also accepts a
+per-request `provider` so the browser modal can switch at runtime.
 
 OpenAI Realtime WebRTC is optional. Enable it explicitly with
 `--tts-provider openai --enable-realtime`; the browser will try Realtime first
@@ -204,15 +206,16 @@ Requirements and notes:
 The phone UI has an **Audio** button (top right) that opens a settings modal for
 switching the audio path at runtime, without restarting the server:
 
-- **Modes**: Live conversation, Gemini TTS (one-way), or OpenAI TTS (one-way).
-  Set **both** `OPENAI_API_KEY` and `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) in the
-  environment / `.env` to switch freely between all three. The server advertises
-  which keys are present (`openai_available` / `gemini_available` in the `hello`
-  message), and the modal disables any mode whose key is missing and defaults to
-  one that works. Live additionally requires launching with
+- **Modes**: Live conversation, Gemini TTS (one-way), OpenAI TTS (one-way), or
+  Cartesia TTS (one-way, Cartesia Sonic — lowest latency). Set the relevant keys
+  (`OPENAI_API_KEY`, `GEMINI_API_KEY`/`GOOGLE_API_KEY`, `CARTESIA_API_KEY`) in the
+  environment / `.env` to switch freely. The server advertises which keys are
+  present (`openai_available` / `gemini_available` / `cartesia_available` in the
+  `hello` message), and the modal disables any mode whose key is missing and
+  defaults to one that works. Live additionally requires launching with
   `--conversation-mode gemini_live`.
-- **Voice**: a shared voice name (alloy/echo/fable/onyx/nova/shimmer) — Gemini
-  routes map it to the matching prebuilt voice automatically.
+- **Voice**: a shared voice name (alloy/echo/fable/onyx/nova/shimmer) — Gemini and
+  Cartesia routes map it to a matching provider voice automatically.
 - **Live model**: the Gemini Live model used for conversation.
 
 The choice persists in `localStorage`. To have both TTS and Live available in the

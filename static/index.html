@@ -2533,6 +2533,14 @@
               </span>
               <span class="audio-status" data-mode-status="openai_tts" data-ready="true">Ready</span>
             </label>
+            <label class="audio-mode" data-mode="cartesia_tts">
+              <input type="radio" name="audioMode" value="cartesia_tts" />
+              <span class="audio-mode-body">
+                <span class="audio-mode-name">Cartesia TTS</span>
+                <span class="audio-mode-desc">One-way spoken lines, Sonic (lowest latency)</span>
+              </span>
+              <span class="audio-status" data-mode-status="cartesia_tts" data-ready="true">Ready</span>
+            </label>
           </div>
         </div>
 
@@ -2651,6 +2659,7 @@
         liveModelExplicit: false,
         openaiAvailable: false,
         geminiAvailable: false,
+        cartesiaAvailable: false,
         audioModalOpener: null,
       };
 
@@ -2658,7 +2667,7 @@
       const REALTIME_SDP_TIMEOUT_MS = 8000;
       const MIC_TARGET_RATE = 16000;
       const CONV_FRAME_INTERVAL_MS = 2500;
-      const AUDIO_MODES = ["live", "gemini_tts", "openai_tts"];
+      const AUDIO_MODES = ["live", "gemini_tts", "openai_tts", "cartesia_tts"];
 
       function setStatus(text) {
         state.transportStatus = text;
@@ -2920,6 +2929,7 @@
           state.conversationEnabled = Boolean(message.conversation_enabled);
           state.openaiAvailable = Boolean(message.openai_available);
           state.geminiAvailable = Boolean(message.gemini_available);
+          state.cartesiaAvailable = Boolean(message.cartesia_available);
           // Honor the server's --conversation-model unless the user picked one.
           if (!state.liveModelExplicit && message.conversation_model) {
             state.liveModel = message.conversation_model;
@@ -3379,12 +3389,15 @@
       }
 
       function ttsProviderFor(mode) {
-        return mode === "openai_tts" ? "openai" : "gemini";
+        if (mode === "openai_tts") return "openai";
+        if (mode === "cartesia_tts") return "cartesia";
+        return "gemini";
       }
 
       function audioModeLabel(mode) {
         if (mode === "live") return "Live";
         if (mode === "openai_tts") return "OpenAI TTS";
+        if (mode === "cartesia_tts") return "Cartesia TTS";
         return "Gemini TTS";
       }
 
@@ -3429,6 +3442,11 @@
             ? { available: true, label: "Ready" }
             : { available: false, label: "Needs OpenAI key" };
         }
+        if (mode === "cartesia_tts") {
+          return state.cartesiaAvailable
+            ? { available: true, label: "Ready" }
+            : { available: false, label: "Needs Cartesia key" };
+        }
         return { available: false, label: "Unavailable" };
       }
 
@@ -3440,8 +3458,10 @@
         if (state.conversationEnabled && state.geminiAvailable) return "live";
         if (state.ttsProvider === "openai" && state.openaiAvailable) return "openai_tts";
         if (state.ttsProvider === "gemini" && state.geminiAvailable) return "gemini_tts";
+        if (state.ttsProvider === "cartesia" && state.cartesiaAvailable) return "cartesia_tts";
         if (state.geminiAvailable) return "gemini_tts";
         if (state.openaiAvailable) return "openai_tts";
+        if (state.cartesiaAvailable) return "cartesia_tts";
         return state.ttsProvider === "openai" ? "openai_tts" : "gemini_tts";
       }
 
