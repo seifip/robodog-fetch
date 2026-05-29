@@ -279,6 +279,10 @@ command duration. On the dog, LiDAR/depth enforces the final `<4m` stop and obst
 avoidance stays enabled. Saved photos are written to `static/captures/` (gitignored);
 set `FETCH_PHOTO_MIRROR_DIRS` (an `os.pathsep`-separated list of folders) to also copy
 each photo into e.g. an iCloud Drive or Google Drive folder so the demo phone syncs it.
+End to end: the Go2's camera and LiDAR drive the capture, photos (and our demo
+recordings) sync to iCloud and Google Drive through those mirror folders, and at the
+event a synced phone sends the shot to a **Xiaomi mini-printer** via the printer's app
+to execute the final physical print.
 
 </details>
 
